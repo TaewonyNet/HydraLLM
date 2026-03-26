@@ -1,0 +1,52 @@
+{
+  "description": "멀티모달 요청 예제 (이미지 포함)",
+  "note": "이미지가 포함된 요청은 Gemini로 자동 라우팅됩니다",
+  "request": {
+    "model": "gpt-4-vision-preview",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "이 이미지에 대해 설명해 주세요."
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBEQCEAwEPwAB//9k="
+            }
+          }
+        ]
+      }
+    ],
+    "temperature": 0.2,
+    "max_tokens": 300
+  },
+  "expected_routing": {
+    "provider": "gemini",
+    "model": "gemini-1.5-flash",
+    "reason": "MULTIMODAL - 이미지 URL 감지됨"
+  },
+  "expected_response": {
+    "id": "chatcmpl-ghi789",
+    "object": "chat.completion",
+    "created": 1707654323,
+    "model": "gemini-1.5-flash",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "이미지에는 깔끔하게 정리된 책상이 보입니다. 모니터, 키보드, 마우스가 놓여 있고, 배경에는 선반과一些小 물건들이 있습니다. 작업 공간으로서 기능적이고 Organized된 환경을 보여줍니다."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 500,
+      "completion_tokens": 80,
+      "total_tokens": 580
+    }
+  }
+}

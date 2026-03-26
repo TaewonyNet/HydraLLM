@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HydraLLM Tester</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f5f7f9; }
+        .container { display: flex; gap: 20px; flex-wrap: wrap; }
+        .chat-section { flex: 1; min-width: 300px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; height: 85vh; }
+        .sidebar { flex: 0 0 300px; min-width: 300px; display: flex; flex-direction: column; gap: 20px; max-height: 85vh; overflow-y: auto; }
+        
+        @media (max-width: 768px) {
+            .container { flex-direction: column; }
+            .chat-section { height: 60vh; }
+            .sidebar { flex: none; width: 100%; max-height: none; }
+        }
+
+        .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        h2 { margin-top: 0; font-size: 1.1rem; color: #007bff; border-bottom: 2px solid #f0f4f8; padding-bottom: 10px; margin-bottom: 15px; }
+        #chat-history { flex-grow: 1; overflow-y: auto; border: 1px solid #eee; padding: 15px; margin-bottom: 15px; border-radius: 4px; display: flex; flex-direction: column; gap: 12px; background-color: #fafafa; }
+        .message { padding: 12px 16px; border-radius: 12px; max-width: 90%; word-wrap: break-word; position: relative; font-size: 0.95rem; }
+        .user-message { background-color: #007bff; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .bot-message { background-color: #ffffff; color: #333; align-self: flex-start; border-bottom-left-radius: 2px; border: 1px solid #e0e0e0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        
+        /* Markdown Styling */
+        .markdown-body pre { background-color: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; border: 1px solid #e1e4e8; margin: 10px 0; }
+        .markdown-body code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 85%; background-color: rgba(27,31,35,0.05); padding: 0.2em 0.4em; border-radius: 3px; }
+        .markdown-body pre code { background-color: transparent; padding: 0; border-radius: 0; font-size: 90%; }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 { margin-top: 16px; margin-bottom: 8px; font-weight: 600; line-height: 1.25; color: #007bff; }
+        .markdown-body p { margin-bottom: 10px; }
+        .markdown-body ul, .markdown-body ol { padding-left: 20px; margin-bottom: 10px; }
+        .markdown-body blockquote { padding: 0 1em; color: #6a737d; border-left: 0.25em solid #dfe2e5; margin: 10px 0; }
+        
+        .input-group { display: flex; gap: 10px; }
+        input[type="text"], textarea, select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 0.9rem; }
+        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: bold; margin-bottom: 5px; }
+        .status-healthy { background-color: #d4edda; color: #155724; }
+        .status-unhealthy { background-color: #f8d7da; color: #721c24; }
+        .tier-badge { font-size: 0.7rem; padding: 1px 5px; border-radius: 4px; margin-left: 5px; text-transform: uppercase; }
+        .tier-free { background-color: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .tier-premium { background-color: #fff3e0; color: #ef6c00; border: 1px solid #ffe0b2; }
+        .tier-experimental { background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #e1bee7; }
+        .tier-standard { background-color: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }
+        pre.raw-json { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 0.75rem; border: 1px solid #eee; white-space: pre-wrap; word-break: break-all; }
+        .raw-tab-active { background: #007bff !important; color: white !important; border-color: #007bff !important; font-weight: bold; }
+        .loading { font-style: italic; color: #666; }
+        .model-info { font-size: 0.8rem; color: #666; margin-top: 5px; padding: 8px; background: #f9f9f9; border-radius: 4px; }
+
+        /* Onboarding Modal */
+        #onboarding-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; display: none; align-items: center; justify-content: center; }
+        .onboarding-modal { background: white; width: 90%; max-width: 600px; max-height: 80vh; border-radius: 12px; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; }
+        .onboarding-list { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
+        .onboarding-item { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #eee; border-radius: 8px; cursor: pointer; }
+        .onboarding-item:hover { background: #f9f9f9; }
+        .onboarding-item input { width: auto; margin: 0; }
+        .onboarding-section-title { font-weight: bold; margin-top: 15px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+    </style>
+</head>
+<body>
+    <div id="onboarding-overlay">
+        <div class="onboarding-modal">
+            <h1 style="margin-top:0;">👋 Welcome to HydraLLM</h1>
+            <p>최초 실행을 환영합니다! 사용하실 에이전트와 모델을 선택해 주세요. 선택한 항목만 목록에 표시됩니다.</p>
+            <div id="onboarding-content" class="onboarding-list">
+                <p class="loading">가용한 에이전트를 불러오는 중...</p>
+            </div>
+            <button onclick="saveOnboarding()" style="width: 100%; padding: 15px; font-size: 1.1rem; background: #28a745; border:none; color:white; border-radius:8px; cursor:pointer;">설정 완료 및 시작하기</button>
+        </div>
+    </div>
+
+    <h1 style="font-size: 1.5rem; margin-bottom: 20px;">🚀 HydraLLM Tester</h1>
+    
+    <div class="container">
+        <div class="chat-section">
+            <h2>Chat Completion</h2>
+            <div id="chat-history"></div>
+            <div class="input-group">
+                <input type="text" id="user-input" placeholder="메시지를 입력하세요..." onkeypress="if(event.key==='Enter') sendMessage()">
+                <button id="send-btn" onclick="sendMessage()">전송</button>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="card">
+                <h2>Configuration</h2>
+                <div style="margin-bottom: 12px;">
+                    <label style="display:block; margin-bottom: 5px; font-weight:bold; font-size: 0.85rem;">Model Select:</label>
+                    <select id="model-select" onchange="updateModelInfo()">
+                        <option value="auto">Auto (Default)</option>
+                    </select>
+                    <div id="selected-model-info" class="model-info">
+                        모델을 선택하면 상세 정보가 표시됩니다.
+                    </div>
+                </div>
+                <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="auto-fetch-check" style="width: auto;" checked>
+                    <label for="auto-fetch-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Auto Web Fetch (URL 자동 감지)</label>
+                </div>
+                <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="compress-check" style="width: auto;" checked>
+                    <label for="compress-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Context Compression (LLMLingua-2)</label>
+                </div>
+                <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="search-check" style="width: auto;">
+                    <label for="search-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Enable Web Search (🌐)</label>
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <label style="display:block; margin-bottom: 5px; font-weight:bold; font-size: 0.85rem;">Web Fetch URL:</label>
+                    <input type="text" id="web-fetch-input" placeholder="https://example.com" style="font-size: 0.8rem;">
+                </div>
+                <div>
+                    <label style="display:block; margin-bottom: 5px; font-weight:bold; font-size: 0.85rem;">Temperature: <span id="temp-val">0.7</span></label>
+                    <input type="range" id="temp-input" value="0.7" step="0.1" min="0" max="2" oninput="document.getElementById('temp-val').innerText=this.value">
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Session Management</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <button onclick="exportSession()" style="background: #28a745; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Export</button>
+                    <button onclick="importSession()" style="background: #17a2b8; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Import</button>
+                    <button onclick="clearHistory()" style="background: #dc3545; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px; grid-column: span 2;">Clear History</button>
+                </div>
+                <input type="file" id="import-file" style="display:none;" onchange="handleImport(this)">
+                <div id="session-info" class="model-info" style="margin-top: 10px;">
+                    Messages in context: <span id="msg-count">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>System Status 
+                    <div style="float: right; display: flex; gap: 5px;">
+                        <button onclick="probeKeys()" id="probe-btn" style="padding: 2px 8px; font-size: 0.7rem; background: #28a745; border:none; color:white; border-radius:4px; cursor:pointer;" title="모든 키 강제 재검증 및 복구">강제 재검증</button>
+                        <button onclick="refreshStatus()" style="padding: 2px 8px; font-size: 0.7rem; background: #6c757d; border:none; color:white; border-radius:4px; cursor:pointer;">새로고침</button>
+                    </div>
+                </h2>
+                <div id="status-content">
+                    <p class="loading">상태를 불러오는 중...</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Raw API Result</h2>
+                <div style="display: flex; gap: 4px; margin-bottom: 10px;">
+                    <button onclick="showRawTab('request')" id="tab-request" class="raw-tab raw-tab-active" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px; cursor:pointer;">Request (입력)</button>
+                    <button onclick="showRawTab('response')" id="tab-response" class="raw-tab" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px; cursor:pointer; background:#f8f9fa; color:#666;">Response (결과)</button>
+                </div>
+                <pre class="raw-json" id="raw-request" style="max-height:300px; overflow-y:auto;">{}</pre>
+                <pre class="raw-json" id="raw-response" style="max-height:300px; overflow-y:auto; display:none;">{}</pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let availableModels = [];
+        let chatMessages = [];
+        let onboardingData = { completed: true, available_models: [] };
+
+        function showRawTab(tab) {
+            const reqEl = document.getElementById('raw-request');
+            const resEl = document.getElementById('raw-response');
+            const tabReq = document.getElementById('tab-request');
+            const tabRes = document.getElementById('tab-response');
+            if (tab === 'request') {
+                reqEl.style.display = 'block';
+                resEl.style.display = 'none';
+                tabReq.className = 'raw-tab raw-tab-active';
+                tabRes.className = 'raw-tab';
+                tabRes.style.background = '#f8f9fa'; tabRes.style.color = '#666';
+            } else {
+                reqEl.style.display = 'none';
+                resEl.style.display = 'block';
+                tabRes.className = 'raw-tab raw-tab-active';
+                tabReq.className = 'raw-tab';
+                tabReq.style.background = '#f8f9fa'; tabReq.style.color = '#666';
+            }
+        }
+
+        // Configure marked to use highlight.js
+        marked.setOptions({
+            highlight: function(code, lang) {
+                const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                return hljs.highlight(code, { language }).value;
+            },
+            langPrefix: 'hljs language-'
+        });
+
+        async function checkOnboarding() {
+            try {
+                const response = await fetch('/v1/admin/onboarding');
+                onboardingData = await response.json();
+                if (!onboardingData.completed) {
+                    showOnboarding();
+                }
+            } catch (e) { console.error('Onboarding check failed:', e); }
+        }
+
+        function showOnboarding() {
+            const overlay = document.getElementById('onboarding-overlay');
+            const content = document.getElementById('onboarding-content');
+            overlay.style.display = 'flex';
+            let html = '';
+            const models = onboardingData.available_models || [];
+            const cloudModels = models.filter(m => m.owned_by !== 'local-agent');
+            const localModels = models.filter(m => m.owned_by === 'local-agent');
+            
+            if (cloudModels.length > 0) {
+                html += '<div class="onboarding-section-title">Cloud Models</div>';
+                cloudModels.forEach(m => {
+                    html += `<label class="onboarding-item"><input type="checkbox" name="model-select" value="${m.id}" checked><div><strong>${m.display_name || m.id}</strong><div style="font-size:0.7rem; color:#666;">${m.owned_by} • Tier: ${m.tier}</div></div></label>`;
+                });
+            }
+            if (localModels.length > 0) {
+                html += '<div class="onboarding-section-title">Local Agents</div>';
+                localModels.forEach(m => {
+                    html += `<label class="onboarding-item"><input type="checkbox" name="model-select" value="${m.id}" checked><div><strong>${m.display_name || m.id}</strong><div style="font-size:0.7rem; color:#666;">${m.owned_by}</div></div></label>`;
+                });
+            }
+            content.innerHTML = html;
+        }
+
+        async function saveOnboarding() {
+            const checkboxes = document.querySelectorAll('input[name="model-select"]:checked');
+            const enabledModels = Array.from(checkboxes).map(cb => cb.value);
+            try {
+                const response = await fetch('/v1/admin/onboarding', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled_models: enabledModels })
+                });
+                if (response.ok) {
+                    document.getElementById('onboarding-overlay').style.display = 'none';
+                    await loadModels();
+                    refreshStatus();
+                }
+            } catch (e) { alert('Save failed: ' + e.message); }
+        }
+
+        async function loadModels() {
+            const select = document.getElementById('model-select');
+            try {
+                const response = await fetch('/v1/models');
+                const data = await response.json();
+                availableModels = data.data || [];
+                select.innerHTML = '';
+                
+                const globalAuto = availableModels.find(m => m.id === 'auto');
+                if (globalAuto) {
+                    const opt = document.createElement('option');
+                    opt.value = globalAuto.id;
+                    opt.textContent = `✨ ${globalAuto.display_name}`;
+                    select.appendChild(opt);
+                }
+
+                const cloudModels = availableModels.filter(m => m.owned_by !== 'local-agent' && m.owned_by !== 'gateway');
+                const localModels = availableModels.filter(m => m.owned_by === 'local-agent');
+                const tierOrder = { 'free': 0, 'experimental': 1, 'standard': 2, 'premium': 3 };
+                const sorter = (a, b) => {
+                    if (a.id.endsWith('/auto') && !b.id.endsWith('/auto')) return -1;
+                    if (!a.id.endsWith('/auto') && b.id.endsWith('/auto')) return 1;
+                    const tierA = tierOrder[a.tier] !== undefined ? tierOrder[a.tier] : 2;
+                    const tierB = tierOrder[b.tier] !== undefined ? tierOrder[b.tier] : 2;
+                    if (tierA !== tierB) return tierA - tierB;
+                    return a.id.localeCompare(b.id);
+                };
+
+                const addGroup = (label, models) => {
+                    if (models.length === 0) return;
+                    const group = document.createElement('optgroup');
+                    group.label = label;
+                    
+                    models.sort(sorter).forEach(m => {
+                        if (m.id === 'auto') return;
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        const multi = m.capabilities.multimodal ? '🖼️ ' : '';
+                        const search = m.capabilities.has_search ? '🌐 ' : '';
+                        const prefix = m.id.endsWith('/auto') ? '✨ ' : '';
+                        opt.textContent = `${prefix}${multi}${search}${m.display_name || m.id}`;
+                        group.appendChild(opt);
+                    });
+                    select.appendChild(group);
+                };
+
+                addGroup('Cloud Models', cloudModels);
+                addGroup('Local Agents', localModels);
+                updateModelInfo();
+            } catch (err) { select.innerHTML = '<option disabled>Load failed</option>'; }
+        }
+
+        function updateModelInfo() {
+            const id = document.getElementById('model-select').value;
+            const infoDiv = document.getElementById('selected-model-info');
+            if (id.endsWith('/auto') || id === 'auto') {
+                infoDiv.innerHTML = '입력 토큰 수에 따라 최적의 모델로 자동 라우팅합니다.';
+                return;
+            }
+            const model = availableModels.find(m => m.id === id);
+            if (model) {
+                const caps = [];
+                if (model.capabilities.multimodal) caps.push('🖼️ Multimodal');
+                if (model.capabilities.has_search) caps.push('🌐 Web Search');
+                infoDiv.innerHTML = `<div><strong>Provider:</strong> ${model.owned_by} <span class="tier-badge tier-${model.tier}">${model.tier}</span></div><div><strong>Max Tokens:</strong> ${model.capabilities.max_tokens.toLocaleString()}</div>${caps.length > 0 ? `<div style="margin-top:5px; font-weight:bold; color:#007bff;">Capabilities: ${caps.join(', ')}</div>` : ''}${model.description ? `<div style="margin-top:5px; font-style:italic; color:#777;">${model.description}</div>` : ''}`;
+            }
+        }
+
+        async function refreshStatus() {
+            const statusDiv = document.getElementById('status-content');
+            try {
+                const response = await fetch('/v1/admin/status');
+                const data = await response.json();
+                let html = '<div style="display:flex; flex-direction:column; gap:10px;">';
+                const statusObj = data.status || {};
+                const providers = statusObj.providers || {};
+                const agents = statusObj.agents || {};
+                const keyStats = data.key_statistics || {};
+                
+                html += '<div style="font-weight:bold; font-size:0.85rem; color:#333;">Cloud Providers</div>';
+                for (const [name, info] of Object.entries(providers)) {
+                    const statusClass = info.healthy ? 'status-healthy' : 'status-unhealthy';
+                    const providerKeyData = keyStats[name] || { keys: [] };
+                    html += `<div style="border-bottom: 1px solid #f0f0f0; padding-bottom:5px; margin-bottom:5px;"><div style="display:flex; justify-content:space-between; align-items:center;"><strong>${name.toUpperCase()}</strong><span class="status-badge ${statusClass}">${info.healthy ? 'OK' : 'ERROR'}</span></div><div style="font-size:0.75rem; color:#666;">Keys: ${info.active_keys} active / ${info.failed_keys} failed</div><div style="margin-top:5px; display:flex; flex-wrap:wrap; gap:3px;">${(providerKeyData.keys || []).map(k => `<span title="Tier: ${k.tier}, Usage: ${k.usage}" style="font-size:0.6rem; padding:1px 4px; border-radius:3px; background:${k.status === 'active' ? (k.tier === 'premium' ? '#fff3e0' : '#e8f5e9') : '#ffebee'}; color:${k.status === 'active' ? (k.tier === 'premium' ? '#ef6c00' : '#2e7d32') : '#c62828'}; border:1px solid ${k.status === 'active' ? (k.tier === 'premium' ? '#ffe0b2' : '#c8e6c9') : '#ffcdd2'};">${k.id}</span>`).join('')}</div></div>`;
+                }
+                html += '<div style="font-weight:bold; font-size:0.85rem; margin-top:10px; color:#333;">Local Agents</div>';
+                for (const [name, info] of Object.entries(agents)) {
+                    const statusClass = info.healthy ? 'status-healthy' : 'status-unhealthy';
+                    html += `<div style="border-bottom: 1px solid #f0f0f0; padding-bottom:5px; margin-bottom:5px;"><div style="display:flex; justify-content:space-between; align-items:center;"><strong>${name.toUpperCase()}</strong><span class="status-badge ${statusClass}">${info.healthy ? 'ON' : 'OFF'}</span></div><div style="font-size:0.7rem; color:#888;">${info.base_url || 'CLI mode'}</div></div>`;
+                }
+                statusDiv.innerHTML = html + '</div>';
+            } catch (err) { statusDiv.innerHTML = '<p class="status-unhealthy">Status Load Failed</p>'; }
+        }
+
+        async function probeKeys() {
+            const btn = document.getElementById('probe-btn');
+            const originalText = btn.innerText;
+            btn.disabled = true;
+            btn.innerText = '...';
+            try {
+                await fetch('/v1/admin/probe', { method: 'POST' });
+                alert('재검증 시작됨');
+                refreshStatus();
+            } catch (err) { alert('실패: ' + err.message); }
+            finally { btn.disabled = false; btn.innerText = originalText; }
+        }
+
+        function initHistory() {
+            const saved = localStorage.getItem('m_llm_h');
+            if (saved) {
+                try {
+                    chatMessages = JSON.parse(saved);
+                    renderAllMessages();
+                } catch (e) { chatMessages = []; }
+            } else { addMessageToUI('assistant', 'Welcome!', false); }
+            updateMessageCount();
+        }
+
+        function saveHistory() {
+            localStorage.setItem('m_llm_h', JSON.stringify(chatMessages));
+            updateMessageCount();
+        }
+
+        function updateMessageCount() { document.getElementById('msg-count').innerText = chatMessages.length; }
+
+        function clearHistory() {
+            if (confirm('Clear?')) {
+                chatMessages = [];
+                localStorage.removeItem('m_llm_h');
+                document.getElementById('chat-history').innerHTML = '';
+                addMessageToUI('assistant', 'Cleared.', false);
+                updateMessageCount();
+            }
+        }
+
+        function exportSession() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(chatMessages, null, 2));
+            const dl = document.createElement('a');
+            dl.setAttribute("href", dataStr);
+            dl.setAttribute("download", "session.json");
+            dl.click();
+        }
+
+        function importSession() { document.getElementById('import-file').click(); }
+
+        function handleImport(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const imported = JSON.parse(e.target.result);
+                    if (Array.isArray(imported)) {
+                        chatMessages = imported;
+                        saveHistory();
+                        renderAllMessages();
+                    }
+                } catch (err) { alert('Error: ' + err.message); }
+            };
+            reader.readAsText(file);
+        }
+
+        function renderAllMessages() {
+            const history = document.getElementById('chat-history');
+            history.innerHTML = '';
+            chatMessages.forEach(msg => addMessageToUI(msg.role, msg.content, false));
+            history.scrollTop = history.scrollHeight;
+        }
+
+        function addMessageToUI(role, content, save = true) {
+            const history = document.getElementById('chat-history');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${role}-message ${role === 'assistant' ? 'markdown-body' : ''}`;
+            if (role === 'assistant') msgDiv.innerHTML = marked.parse(content);
+            else msgDiv.textContent = content;
+            history.appendChild(msgDiv);
+            history.scrollTop = history.scrollHeight;
+            if (save) { chatMessages.push({ role, content }); saveHistory(); }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('user-input');
+            const btn = document.getElementById('send-btn');
+            const model = document.getElementById('model-select').value;
+            const search = document.getElementById('search-check').checked;
+            const autoFetch = document.getElementById('auto-fetch-check').checked;
+            const compressCtx = document.getElementById('compress-check').checked;
+            const webFetchInput = document.getElementById('web-fetch-input');
+            const webFetch = webFetchInput ? webFetchInput.value.trim() : null;
+            const temp = parseFloat(document.getElementById('temp-input').value);
+            if (!input.value.trim()) return;
+            const text = input.value;
+            input.value = '';
+            addMessageToUI('user', text);
+            btn.disabled = true;
+            const history = document.getElementById('chat-history');
+            const loadingMsg = document.createElement('div');
+            loadingMsg.className = 'message bot-message loading';
+            loadingMsg.textContent = '...';
+            history.appendChild(loadingMsg);
+            history.scrollTop = history.scrollHeight;
+
+            const requestBody = {
+                model: model,
+                messages: chatMessages,
+                temperature: temp,
+                has_search: search,
+                auto_web_fetch: autoFetch,
+                compress_context: compressCtx,
+                web_fetch: webFetch || undefined
+            };
+
+            // RAW Request 표시
+            document.getElementById('raw-request').textContent = JSON.stringify(requestBody, null, 2);
+
+            try {
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                const data = await response.json();
+
+                // RAW Response 표시: _gateway_debug가 있으면 분리하여 Request(After)에 표시
+                if (data._gateway_debug) {
+                    const debug = data._gateway_debug;
+                    document.getElementById('raw-request').textContent = JSON.stringify({
+                        "원본 요청 (Before Gateway)": debug.request_before,
+                        "실제 전달 (After Gateway)": debug.request_after
+                    }, null, 2);
+                    const responseOnly = { ...data };
+                    delete responseOnly._gateway_debug;
+                    document.getElementById('raw-response').textContent = JSON.stringify(responseOnly, null, 2);
+                } else {
+                    document.getElementById('raw-response').textContent = JSON.stringify(data, null, 2);
+                }
+
+                if (history.contains(loadingMsg)) history.removeChild(loadingMsg);
+                if (response.ok) {
+                    const content = (data.choices && data.choices[0] && data.choices[0].message) ? data.choices[0].message.content : "No response";
+                    const botMsg = document.createElement('div');
+                    botMsg.className = 'message bot-message markdown-body';
+                    botMsg.innerHTML = marked.parse(content);
+                    if (data.usage && (data.usage.gateway_key_id || data.usage.gateway_model)) {
+                        const meta = document.createElement('div');
+                        meta.style.fontSize = '0.65rem'; meta.style.color = '#999'; meta.style.marginTop = '12px'; meta.style.paddingTop = '8px'; meta.style.borderTop = '1px solid #eee';
+                        meta.innerHTML = `⚙️ <strong>${data.usage.gateway_model || ''}</strong> via <code>${data.usage.gateway_key_id || 'unknown'}</code>`;
+                        botMsg.appendChild(meta);
+                    }
+                    history.appendChild(botMsg);
+                    chatMessages.push({ role: 'assistant', content: content });
+                    saveHistory();
+                } else {
+                    const errMsg = document.createElement('div');
+                    errMsg.className = 'message bot-message status-unhealthy';
+                    errMsg.textContent = `Error: ${data.detail || 'Unknown error'}`;
+                    history.appendChild(errMsg);
+                }
+            } catch (err) {
+                if (history.contains(loadingMsg)) history.removeChild(loadingMsg);
+                const errMsg = document.createElement('div');
+                errMsg.className = 'message bot-message status-unhealthy';
+                errMsg.textContent = `Fetch Error: ${err.message}`;
+                history.appendChild(errMsg);
+            } finally {
+                btn.disabled = false;
+                history.scrollTop = history.scrollHeight;
+                refreshStatus();
+            }
+        }
+
+        window.onload = function() {
+            initHistory();
+            checkOnboarding();
+            loadModels();
+            refreshStatus();
+        };
+    </script>
+</body>
+</html>

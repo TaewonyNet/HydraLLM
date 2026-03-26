@@ -1,0 +1,36 @@
+{
+  "description": "간단한 채팅 요청 예제",
+  "note": "Groq (Llama 8B)로 자동 라우팅됩니다",
+  "request": {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "안녕하세요! 오늘 날씨가 좋네요."
+      }
+    ],
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  "expected_response": {
+    "id": "chatcmpl-abc123",
+    "object": "chat.completion",
+    "created": 1707654321,
+    "model": "llama-3.1-8b-instant",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "안녕하세요! 날씨가 정말 좋아서 기분이 좋네요. 어떻게 도와드릴까요?"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 15,
+      "completion_tokens": 25,
+      "total_tokens": 40
+    }
+  }
+}

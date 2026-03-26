@@ -1,0 +1,41 @@
+{
+  "description": "장문 컨텍스트 요청 예제",
+  "note": "8000 토큰 이상의 긴 텍스트는 Gemini로 자동 라우팅됩니다",
+  "request": {
+    "model": "gpt-4",
+    "messages": [
+      {
+        "role": "user",
+        "content": "다음은 매우 긴 문서입니다. 이 문서에 대한 요약을 작성해 주세요.\n\n[긴 문서 내용 시작]\nLorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.\n\n[문서 내용이 매우 길게 이어집니다...]\n\n[긴 문서 내용 끝]\n요약: "
+      }
+    ],
+    "temperature": 0.3,
+    "max_tokens": 500
+  },
+  "expected_routing": {
+    "provider": "gemini",
+    "model": "gemini-1.5-flash",
+    "reason": "LONG_CONTEXT - 토큰 수가 8000개 초과"
+  },
+  "expected_response": {
+    "id": "chatcmpl-def456",
+    "object": "chat.completion",
+    "created": 1707654322,
+    "model": "gemini-1.5-flash",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "문서 요약:\n\n이 문서는 Lorem ipsum 포맷의 표준 텍스트로, 디자인 및 레이아웃 작업에서 시각적 표현을 확인하는 데 사용됩니다. 주요 포인트를 정리하면:\n\n1. 디자인 프리뷰용 표준 텍스트\n2. 레이아웃 구조 확인\n3. 가독성 테스트\n..."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 8500,
+      "completion_tokens": 150,
+      "total_tokens": 8650
+    }
+  }
+}

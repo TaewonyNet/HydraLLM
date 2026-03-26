@@ -1,0 +1,45 @@
+{
+  "description": "복잡한 쿼리 요청 예제",
+  "note": "복잡한 분석이 필요한 쿼리는 Cerebras (Llama 70B)로 자동 라우팅됩니다",
+  "request": {
+    "model": "gpt-4",
+    "messages": [
+      {
+        "role": "system",
+        "content": "당신은 숙련된 데이터 과학자입니다."
+      },
+      {
+        "role": "user",
+        "content": "다음 데이터셋에 대해 심층 분석을 수행해 주세요:\n\n1. 데이터의 전반적인 분포 특성\n2. 이상치(Outlier) 식별\n3.-feature 간 상관관계 분석\n4. 예측 모델링을 위한 권장사항\n5. 비즈니스 인사이트 도출\n\n[가상의 복잡한 데이터셋 설명]\n이 데이터셋은 5년간의 고객 구매 이력으로, 100만 건 이상의 레코드를 포함합니다. 각 레코드에는 구매일시, 제품 카테고리, 고객 인구통계, 지역 정보, 구매금액, 재구매 여부 등이 포함되어 있습니다."
+      }
+    ],
+    "temperature": 0.5,
+    "max_tokens": 1000
+  },
+  "expected_routing": {
+    "provider": "cerebras",
+    "model": "llama-3.1-70b-versatile",
+    "reason": "HIGH_PERFORMANCE - 복잡한 분석 요청 (gpt-4 모델 힌트)"
+  },
+  "expected_response": {
+    "id": "chatcmpl-jkl012",
+    "object": "chat.completion",
+    "created": 1707654324,
+    "model": "llama-3.1-70b-versatile",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "# 고객 구매 데이터 심층 분석 보고서\n\n## 1. 데이터 분포 특성\n- 구매금액은 우측 편향된 분포를 보입니다 (평균 ₩45,000, 중앙값 ₩32,000)\n- 주말 구매가 평일 대비 23% 높음\n- 20-30대 고객이 전체 구매의 45% 차지\n\n## 2. 이상치 식별\n- ₩500,000 이상 고가 구매: 전체의 2.3%\n- 특정 고가 제품 카테고리 집중\n- 반품 이력이 있는 고객의 15%가 이상치 패턴\n\n## 3. 상관관계 분석\n- 구매금액과 재구매 빈도: r=0.67 (강한 양의 상관)\n- 지역과 제품 카테고리: 카이제곱 검정 결과 유의미한 연관성\n- 고객 연령대와 평균 구매금액: 약한 음의 상관(r=-0.23)\n\n## 4. 예측 모델링 권장사항\n- Random Forest 또는 XGBoost 활용\n- 시간 기반 피처 엔지니어링 (월/요일/시간대)\n- 교차 검증으로 과적합 방지\n\n## 5. 비즈니스 인사이트\n- 고가 제품 고객 대상으로 Loyalty Program 제안\n- 주말 마케팅 캠페인 강화\n- 40대 고객 재구매율 향상을 위한 전략 수립"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 450,
+      "completion_tokens": 520,
+      "total_tokens": 970
+    }
+  }
+}
