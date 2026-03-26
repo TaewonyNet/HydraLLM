@@ -1,6 +1,8 @@
-# 🚀 Multi-LLM Gateway: 지능형 키 순환 및 컨텍스트 라우팅 시스템
+[English](README.md) | [한국어](README.ko.md)
 
-**Multi-LLM Gateway**는 여러 LLM 제공자(Gemini, Groq, Cerebras)를 하나로 통합하여 표준화된 OpenAI 호환 인터페이스를 제공하는 고성능 API 게이트웨이입니다. **지능형 키 순환**, **티어 기반 라우팅**, **로컬 세션 영구 저장** 기능을 통해 무료 티어 쿼터를 극대화하고 안정적인 AI 서비스를 구축할 수 있도록 돕습니다.
+# 🚀 HydraLLM: 지능형 키 순환 및 컨텍스트 라우팅 시스템
+
+**HydraLLM**은 여러 LLM 제공자(Gemini, Groq, Cerebras)를 하나로 통합하여 표준화된 OpenAI 호환 인터페이스를 제공하는 고성능 API 게이트웨이입니다. **지능형 키 순환**, **티어 기반 라우팅**, **로컬 세션 영구 저장** 기능을 통해 무료 티어 쿼터를 극대화하고 안정적인 AI 서비스를 구축할 수 있도록 돕습니다.
 
 ---
 
@@ -14,11 +16,13 @@
 - **고급 커스텀 웹 스크래퍼 및 검색**:
   - **Playwright** 기반의 자체 스크래핑 엔진을 통해 무료 티어 사용자도 실시간 웹 정보를 활용할 수 있습니다.
   - 3가지 모드 지원: `standard` (정제된 마크다운), `simple` (raw 텍스트 추출), `network_only` (최속 모드, CSS/JS 차단).
-  - 요청 시 `web_fetch` 필드를 통해 외부 URL 데이터를 자동으로 가져와 컨텍스트에 포함합니다.
+  - 요청 시 `web_fetch` 필드를 통해 외부 URL 데이터를 자동으로 가져오거나 프롬프트 내 URL을 자동 감지하여 컨텍스트에 포함합니다.
 - **Context-Aware 스마트 라우팅**:
   - 입력 토큰 수, 이미지 포함 여부(멀티모달), 검색 필요성 등을 분석하여 최적의 모델을 자동 선택합니다.
   - **키 권한 인지 로직**: 유료 키가 없는 경우 고용량 무료 모델(Gemini Flash 등)로 자동 폴백하여 서비스 중단을 방지합니다.
   - **임계값 최적화**: 속도 중심(Groq < 1.5k), 균형 중심(Cerebras < 5k), 용량 중심(Gemini > 5k)으로 라우팅됩니다.
+- **LLMLingua-2 프롬프트 압축**:
+  - (선택 사항) **LLMLingua-2**를 사용하여 긴 대화 기록이나 웹 콘텐츠를 압축, 컨텍스트 제한 내에서 효율적으로 처리합니다.
 - **로컬 세션 영구 저장 (Stateless but Contextual)**:
   - **DuckDB**를 활용하여 대화 기록을 서버 로컬에 안전하게 저장합니다.
   - **에이전트 간 연속성**: Gemini에서 시작한 대화를 Groq나 로컬 에이전트로 변경하더라도 전체 대화 맥락이 완벽하게 유지됩니다.
@@ -26,13 +30,16 @@
   - `/v1/chat/completions`, `/v1/models`, `/v1/completions` 등 표준 엔드포인트를 완벽히 지원합니다.
   - **OpenClaw 특화 지원**: `/v1/responses` 별칭 경로와 `input`, `max_output_tokens`, `prompt` 필드 자동 매핑을 지원합니다.
   - **표준 스트리밍 (SSE)**: OpenAI 서버 전송 이벤트 표준을 준수하여 실시간 응답을 제공합니다.
-- **동적 모델 발견 및 가상 모델**:
-  - 서버 시작 시 제공자 및 로컬 에이전트로부터 최신 모델 목록을 자동으로 가져옵니다.
-  - `auto`, `gemini/auto`, `groq/auto` 등 특정 제공자에 특화된 지능형 가상 모델을 지원합니다.
-- **고급 디버깅 웹 UI**:
-  - 마크다운 렌더링, 코드 문법 강조, 대화형 온보딩 마법사가 포함된 대시보드(`/ui`)를 제공합니다.
 - **로컬 에이전트 통합**:
   - **Ollama**, **OpenCode**, **OpenClaw** 등 로컬 CLI 엔진을 `subprocess` 방식으로 직접 호출하여 API로 통합합니다.
+
+---
+
+## 🕹️ 인터랙티브 플레이그라운드 (쉬운 접근)
+
+HydraLLM을 테스트하는 가장 쉬운 방법은 내장된 웹 UI를 사용하는 것입니다.
+- **접속 주소**: `http://localhost:8000/ui`
+- **주요 기능**: 코딩 없이도 풀링된 모델들과 직접 채팅하고, 키 상태를 모니터링하며, 세션을 관리할 수 있습니다.
 
 ---
 
@@ -41,24 +48,28 @@
 ### 1. 설치
 
 ```bash
-git clone https://github.com/TaewonyNet/agent-playground.git
-cd free_agent
+# 저장소 복제
+git clone https://github.com/TaewonyNet/HydraLLM.git
+cd HydraLLM
+
+# 패키지 및 의존성 설치
 pip install -e .
+
+# Playwright 브라우저 바이너리 설치
+playwright install chromium
 ```
 
 ### 2. 환경 설정 (`.env`)
+
+루트 디렉토리에 `.env` 파일을 생성하세요:
 
 ```env
 PORT=8000
 LOG_LEVEL=INFO
 
-# 제공자별 API 키 (쉼표로 구분)
-GEMINI_KEYS=key1,key2
+# 제공자 API 키 (여러 개인 경우 콤마로 구분)
+GEMINI_KEYS=key1,key2,key3
 GROQ_KEYS=gsk_1,gsk_2
-
-# 기본 모델 설정
-DEFAULT_FREE_MODEL=gemini-flash-latest
-DEFAULT_PREMIUM_MODEL=gemini-pro-latest
 ```
 
 ### 3. 서버 실행
@@ -89,6 +100,13 @@ python main.py
 
 ---
 
+## 🤝 기여하기
+
+기여는 언제나 환영합니다! 새로운 제공자 어댑터 추가, 라우팅 알고리즘 개선, UI/UX 디자인 개선, 문서화 지원 등 모든 형태의 기여를 기다립니다.
+
+---
+
 ## 📄 라이선스
 
 본 프로젝트는 **MIT License**에 따라 배포됩니다.
+
