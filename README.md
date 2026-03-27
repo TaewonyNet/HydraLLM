@@ -18,7 +18,8 @@
   - **Key-Aware Logic**: Intelligently falls back to high-capacity free models (like Gemini Flash) if no premium keys are available.
   - **Thresholds**: Optimized for speed (Groq < 1,500 tokens), balance (Cerebras < 5,000 tokens), and depth (Gemini > 5,000 tokens).
 - **Advanced Custom Web Scraper & Search**:
-  - Integrated **Playwright** based scraping for free tier users to bypass native search limits.
+  - Integrated **Scrapling** and **Playwright** based scraping for free tier users to bypass native search limits.
+  - Features stealthy fetching with **browserforge** headers to minimize anti-bot detection.
   - Supports 3 modes: `standard` (clean structured text), `simple` (raw text), and `network_only` (ultra-fast).
   - Automatically fetches external content via the `web_fetch` field or URL auto-detection in prompts.
 - **LLMLingua-2 Prompt Compression**:

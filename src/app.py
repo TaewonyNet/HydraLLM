@@ -48,6 +48,9 @@ async def lifespan(app: FastAPI):  # type: ignore
     Handle application lifespan events.
     """
     try:
+        scraper = app.state.scraper
+        await scraper.startup()
+
         gateway = app.state.gateway
         gateway.initialize_settings()
 
@@ -63,6 +66,9 @@ async def lifespan(app: FastAPI):  # type: ignore
         logger.error(f"❌ Error during startup: {e}")
 
     yield
+
+    if hasattr(app.state, "scraper"):
+        await app.state.scraper.shutdown()
 
     if hasattr(app.state, "discovery_task"):
         app.state.discovery_task.cancel()
@@ -99,12 +105,10 @@ def create_app() -> FastAPI:
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        body = await request.body()
         logger.error(f"Validation error: {exc.errors()}")
-        logger.error(f"Request body: {body.decode()}")
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={"detail": exc.errors(), "body": body.decode()},
+            content={"detail": exc.errors()},
         )
 
     # Initialize components
@@ -142,6 +146,7 @@ def create_app() -> FastAPI:
     app.state.analyzer = analyzer
     app.state.key_manager = key_manager
     app.state.session_manager = session_manager
+    app.state.scraper = scraper
     app.state.gateway = gateway
 
     # Mount static files
