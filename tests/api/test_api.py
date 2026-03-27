@@ -105,9 +105,8 @@ class TestAPI:
         )
 
         assert response.status_code == 200
-        assert "id" in response.json()
-        assert "object" in response.json()
-        assert "model" in response.json()
+        assert b"data:" in response.content
+        assert b"chatcmpl-stream-123" in response.content
 
     @pytest.mark.asyncio
     async def test_chat_completion_with_all_parameters(self):

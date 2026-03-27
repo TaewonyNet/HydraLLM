@@ -6,6 +6,7 @@ import uvicorn
 
 from src.app import app
 from src.core.config import settings
+from src.core.logging import setup_logging
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HydraLLM Server")
@@ -17,8 +18,6 @@ if __name__ == "__main__":
 
     if args.debug:
         settings.debug = True
-        from src.core.logging import setup_logging
-
         setup_logging()
         print("🔧 Debug mode enabled via CLI")
 

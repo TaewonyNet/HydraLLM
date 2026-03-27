@@ -109,7 +109,7 @@ Gateway Service (gateway.py)
 - `AgentType`: ollama, opencode, openclaw.
 - `RoutingReason`: token_count, image_present, model_hint, search_required.
 
-> Tiers are managed as strings: `"free"`, `"standard"`, `"premium"`, `"experimental"`, `"unknown"`.
+> Tiers are managed via `TierType` Enum: `FREE`, `STANDARD`, `PREMIUM`, `EXPERIMENTAL`, `UNKNOWN`.
 
 #### `models.py`
 
@@ -155,12 +155,11 @@ Dynamic list of all discovered models.
 
 1. **Explicit Model Hint**: If the model string is recognized (e.g. "gpt-4o"), it maps to a pre-defined high-quality equivalent.
 2. **Provider Auto**: e.g., `GEMINI/auto` routes within Gemini using current key tiers.
-3. **Multimodal**: Priortizes Gemini Vision if images are detected.
-4. **Token Count**:
-   - < 1,500: Groq (Llama 3.3 70B) for speed.
-   - < 5,000: Cerebras (Llama 3.1 70B) for high-speed fallback.
-   - \> 5,000: Gemini for high context window.
-5. **Tier Awareness**: Pro models are only selected if `premium` keys are available.
+3. **Multimodal**: Prioritizes Gemini Vision if images are detected.
+4. **Token Count** (2-tier routing, threshold = `max_tokens_fast_model` = 8192):
+   - < 8,192: Groq (Llama 3.3 70B) for speed.
+   - ≥ 8,192: Gemini for high context window.
+5. **Tier Awareness**: Pro models are only selected if `premium` keys are available. Managed via `TierType` Enum (`FREE`, `STANDARD`, `PREMIUM`, `EXPERIMENTAL`, `UNKNOWN`).
 
 ---
 

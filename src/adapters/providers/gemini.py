@@ -20,11 +20,6 @@ class GeminiAdapter(ILLMProvider):
 
     def get_supported_models(self) -> list[ModelType]:
         return [
-            ModelType.GEMINI_3_1_PRO,
-            ModelType.GEMINI_3_1_ULTRA,
-            ModelType.GEMINI_3_PRO,
-            ModelType.GEMINI_3_FLASH,
-            ModelType.GEMINI_3_1_FLASH_LITE,
             ModelType.GEMINI_2_5_FLASH,
             ModelType.GEMINI_2_0_PRO,
             ModelType.GEMINI_2_0_FLASH,
@@ -115,12 +110,6 @@ class GeminiAdapter(ILLMProvider):
 
     def _map_model_name(self, request_model: str | None) -> str:
         mapping = {
-            "gemini-3.1-pro": "gemini-3.1-pro-preview",
-            "gemini-3.1-ultra": "gemini-3.1-ultra-preview",
-            "gemini-3.0-pro": "gemini-3.0-pro-preview",
-            "gemini-3.0-flash": "gemini-3.0-flash-preview",
-            "gemini-3.0-flash-lite": "gemini-3.1-flash-lite-preview",
-            "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
             "gemini-2.5-flash": "gemini-2.5-flash",
             "gemini-2.0-pro": "gemini-2.0-pro-exp",
             "gemini-2.0-flash": "gemini-2.0-flash",
@@ -168,9 +157,15 @@ class GeminiAdapter(ILLMProvider):
         response_content = "[No response content]"
 
         try:
-            if hasattr(gemini_response, "candidates") and gemini_response.candidates:
-                candidate = gemini_response.candidates[0]
+            candidate = (
+                gemini_response.candidates[0]
+                if hasattr(gemini_response, "candidates") and gemini_response.candidates
+                else None
+            )
 
+            if hasattr(gemini_response, "text") and gemini_response.text:
+                response_content = gemini_response.text
+            elif candidate:
                 if hasattr(candidate, "content") and hasattr(
                     candidate.content, "parts"
                 ):
@@ -179,7 +174,10 @@ class GeminiAdapter(ILLMProvider):
                     ]
                     if parts:
                         response_content = "".join(parts)
+            else:
+                response_content = "[No candidates returned]"
 
+            if candidate:
                 if hasattr(candidate, "finish_reason") and candidate.finish_reason:
                     reason_map = {
                         1: "stop",
@@ -200,13 +198,8 @@ class GeminiAdapter(ILLMProvider):
                     try:
                         if hasattr(candidate.grounding_metadata, "to_dict"):
                             grounding_metadata = candidate.grounding_metadata.to_dict()
-                        else:
-                            pass
-
                     except Exception as me:
                         logger.warning(f"Failed to serialize grounding metadata: {me}")
-            else:
-                response_content = "[No candidates returned]"
         except Exception as e:
             logger.error(f"Failed to parse Gemini response: {e}")
             response_content = f"[Error parsing response: {str(e)}]"
@@ -284,7 +277,8 @@ class GeminiAdapter(ILLMProvider):
                 err_msg = str(e).lower()
                 if "limit: 0" in err_msg or "free_tier" in err_msg or "404" in err_msg:
                     tier = "free"
-                else:
+                elif "429" in err_msg:
+                    logger.warning(f"Key {api_key[:8]}... is still exhausted (429)")
                     raise
 
             return {

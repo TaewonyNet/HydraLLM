@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     enable_logging: bool = True
     enable_auto_web_fetch: bool = True
 
+    provider_priority: list[str] | str = "gemini,groq,cerebras,ollama,opencode,openclaw"
+
     free_models: list[
         str
     ] | str | None = "gemini-1.5-flash,gemini-2.0-flash,llama-3.1-8b,llama3,ollama"
@@ -44,8 +46,8 @@ class Settings(BaseSettings):
         str
     ] | str | None = "gemini-1.5-pro,gemini-3.1-pro,llama-3.1-70b,gpt-4o"
 
-    default_free_model: str = "gemini-flash-latest"
-    default_premium_model: str = "gemini-pro-latest"
+    default_free_model: str = "gemini-2.5-flash"
+    default_premium_model: str = "gemini-2.5-flash"
 
     default_scrape_mode: str = "standard"
 
@@ -55,6 +57,8 @@ class Settings(BaseSettings):
     enable_context_compression: bool = True
 
     max_sessions: int = 50
+    session_compact_threshold: int = 6000  # 토큰 추정치 초과 시 compaction 트리거
+    session_recent_window: int = 4  # compaction 시 유지할 최근 메시지 수
 
     model_config = {
         "env_file": ".env",

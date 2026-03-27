@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 from src.core.exceptions import ResourceExhaustedError
-from src.domain.enums import ProviderType
+from src.domain.enums import ProviderType, TierType
 from src.domain.interfaces import IKeyManager
 
 
@@ -45,15 +45,17 @@ class KeyManager(IKeyManager):
             else:
                 self._logger.warning(f"No keys provided for provider {provider.value}")
 
-    async def get_next_key(self, provider: ProviderType, min_tier: str = "free") -> str:
+    async def get_next_key(
+        self, provider: ProviderType, min_tier: TierType = TierType.FREE
+    ) -> str:
         active_keys = self._active_keys.get(provider, [])
 
-        if min_tier == "premium":
+        if min_tier == TierType.PREMIUM:
             premium_candidates = [
                 k
                 for k in active_keys
                 if self._key_metadata.get(provider, {}).get(k, {}).get("tier")
-                in ["premium", "standard", "unknown"]
+                in [TierType.PREMIUM, TierType.STANDARD, TierType.UNKNOWN]
             ]
             if premium_candidates:
                 active_keys = premium_candidates
@@ -131,9 +133,7 @@ class KeyManager(IKeyManager):
                     {
                         "id": k[:8] + "...",
                         "status": "active" if k in active else "failed",
-                        "tier": self._key_metadata.get(provider, {})
-                        .get(k, {})
-                        .get("tier", "unknown"),
+                        "tier": self._get_tier_value(provider, k),
                         "usage": usage.get(k, 0),
                     }
                     for k in pools
@@ -142,6 +142,17 @@ class KeyManager(IKeyManager):
             }
 
         return status
+
+    def _get_tier_value(self, provider: ProviderType, key: str) -> str:
+        """Get tier as string value for serialization."""
+        tier = (
+            self._key_metadata.get(provider, {})
+            .get(key, {})
+            .get("tier", TierType.UNKNOWN)
+        )
+        if isinstance(tier, TierType):
+            return tier.value
+        return str(tier)
 
     def get_available_keys_count(self, provider: ProviderType) -> int:
         """Get count of available keys for a provider."""
@@ -185,7 +196,7 @@ class KeyManager(IKeyManager):
                 self._active_keys[provider].append(key)
                 self._key_usage[provider][key] = 0
                 self._key_metadata[provider][key] = {
-                    "tier": "unknown",
+                    "tier": TierType.UNKNOWN,
                     "last_probed": None,
                 }
 
@@ -201,6 +212,13 @@ class KeyManager(IKeyManager):
     def get_key_metadata(self, provider: ProviderType, api_key: str) -> dict[str, Any]:
         """Get metadata for a specific key."""
         return self._key_metadata.get(provider, {}).get(api_key, {})
+
+    def get_key_index(self, provider: ProviderType, api_key: str) -> int:
+        pool = self._key_pools.get(provider, [])
+        try:
+            return pool.index(api_key)
+        except ValueError:
+            return -1
 
     def get_next_key_sync(self, provider: ProviderType) -> str:
         """Synchronous version of get_next_key for testing."""

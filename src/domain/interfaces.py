@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .enums import ModelType, ProviderType
+from .enums import ModelType, ProviderType, TierType
 from .models import ChatRequest, ChatResponse, RoutingDecision
 
 
@@ -128,7 +128,7 @@ class IKeyManager(ABC):
     """
 
     @abstractmethod
-    async def get_next_key(self, provider: ProviderType, min_tier: str = "free") -> str:
+    async def get_next_key(self, provider: ProviderType, min_tier: TierType = TierType.FREE) -> str:
         """
         Get the next available API key for the provider.
 

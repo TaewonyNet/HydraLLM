@@ -26,12 +26,6 @@ class ModelType(Enum):
     Supported model types for each provider.
     """
 
-    GEMINI_3_1_PRO = "gemini-3.1-pro"
-    GEMINI_3_1_ULTRA = "gemini-3.1-ultra"
-    GEMINI_3_PRO = "gemini-3.0-pro"
-    GEMINI_3_FLASH = "gemini-3.0-flash"
-    GEMINI_3_FLASH_LITE = "gemini-3.0-flash-lite"
-    GEMINI_3_1_FLASH_LITE = "gemini-3.1-flash-lite"
     GEMINI_2_5_FLASH = "gemini-2.5-flash"
     GEMINI_2_0_PRO = "gemini-2.0-pro"
     GEMINI_2_0_FLASH = "gemini-2.0-flash"
@@ -64,6 +58,18 @@ class ModelType(Enum):
     OLLAMA_MODEL = "ollama"
     OPENCODE_MODEL = "opencode"
     OPENCLAW_MODEL = "openclaw"
+
+
+class TierType(Enum):
+    """
+    API key tier classification.
+    """
+
+    FREE = "free"
+    STANDARD = "standard"
+    PREMIUM = "premium"
+    EXPERIMENTAL = "experimental"
+    UNKNOWN = "unknown"
 
 
 class RoutingReason(Enum):

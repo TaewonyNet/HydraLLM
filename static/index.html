@@ -12,7 +12,7 @@
         .container { display: flex; gap: 20px; flex-wrap: wrap; }
         .chat-section { flex: 1; min-width: 300px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; height: 85vh; }
         .sidebar { flex: 0 0 300px; min-width: 300px; display: flex; flex-direction: column; gap: 20px; max-height: 85vh; overflow-y: auto; }
-        
+
         @media (max-width: 768px) {
             .container { flex-direction: column; }
             .chat-section { height: 60vh; }
@@ -25,8 +25,8 @@
         .message { padding: 12px 16px; border-radius: 12px; max-width: 90%; word-wrap: break-word; position: relative; font-size: 0.95rem; }
         .user-message { background-color: #007bff; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
         .bot-message { background-color: #ffffff; color: #333; align-self: flex-start; border-bottom-left-radius: 2px; border: 1px solid #e0e0e0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-        
-        /* Markdown Styling */
+        .system-message { background-color: #fff3cd; color: #856404; align-self: center; font-size: 0.8rem; border-radius: 4px; text-align: center; max-width: 80%; }
+
         .markdown-body pre { background-color: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; border: 1px solid #e1e4e8; margin: 10px 0; }
         .markdown-body code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 85%; background-color: rgba(27,31,35,0.05); padding: 0.2em 0.4em; border-radius: 3px; }
         .markdown-body pre code { background-color: transparent; padding: 0; border-radius: 0; font-size: 90%; }
@@ -34,7 +34,7 @@
         .markdown-body p { margin-bottom: 10px; }
         .markdown-body ul, .markdown-body ol { padding-left: 20px; margin-bottom: 10px; }
         .markdown-body blockquote { padding: 0 1em; color: #6a737d; border-left: 0.25em solid #dfe2e5; margin: 10px 0; }
-        
+
         .input-group { display: flex; gap: 10px; }
         input[type="text"], textarea, select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 0.9rem; }
         button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
@@ -52,8 +52,11 @@
         .raw-tab-active { background: #007bff !important; color: white !important; border-color: #007bff !important; font-weight: bold; }
         .loading { font-style: italic; color: #666; }
         .model-info { font-size: 0.8rem; color: #666; margin-top: 5px; padding: 8px; background: #f9f9f9; border-radius: 4px; }
+        .session-item { padding: 6px 8px; border: 1px solid #eee; border-radius: 4px; cursor: pointer; font-size: 0.78rem; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .session-item:hover { background: #f0f4ff; }
+        .session-item.active { background: #e3f2fd; border-color: #007bff; }
+        .session-id-display { font-family: monospace; font-size: 0.7rem; color: #999; padding: 4px 0; word-break: break-all; }
 
-        /* Onboarding Modal */
         #onboarding-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; display: none; align-items: center; justify-content: center; }
         .onboarding-modal { background: white; width: 90%; max-width: 600px; max-height: 80vh; border-radius: 12px; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; }
         .onboarding-list { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
@@ -66,8 +69,8 @@
 <body>
     <div id="onboarding-overlay">
         <div class="onboarding-modal">
-            <h1 style="margin-top:0;">👋 Welcome to HydraLLM</h1>
-            <p>최초 실행을 환영합니다! 사용하실 에이전트와 모델을 선택해 주세요. 선택한 항목만 목록에 표시됩니다.</p>
+            <h1 style="margin-top:0;">Welcome to HydraLLM</h1>
+            <p>최초 실행을 환영합니다! 사용하실 에이전트와 모델을 선택해 주세요.</p>
             <div id="onboarding-content" class="onboarding-list">
                 <p class="loading">가용한 에이전트를 불러오는 중...</p>
             </div>
@@ -75,8 +78,8 @@
         </div>
     </div>
 
-    <h1 style="font-size: 1.5rem; margin-bottom: 20px;">🚀 HydraLLM Tester</h1>
-    
+    <h1 style="font-size: 1.5rem; margin-bottom: 20px;">HydraLLM Tester</h1>
+
     <div class="container">
         <div class="chat-section">
             <h2>Chat Completion</h2>
@@ -101,15 +104,15 @@
                 </div>
                 <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
                     <input type="checkbox" id="auto-fetch-check" style="width: auto;" checked>
-                    <label for="auto-fetch-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Auto Web Fetch (URL 자동 감지)</label>
+                    <label for="auto-fetch-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Auto Web Fetch</label>
                 </div>
                 <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
                     <input type="checkbox" id="compress-check" style="width: auto;" checked>
-                    <label for="compress-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Context Compression (LLMLingua-2)</label>
+                    <label for="compress-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Context Compression</label>
                 </div>
                 <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
                     <input type="checkbox" id="search-check" style="width: auto;">
-                    <label for="search-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Enable Web Search (🌐)</label>
+                    <label for="search-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Enable Web Search</label>
                 </div>
                 <div style="margin-bottom: 12px;">
                     <label style="display:block; margin-bottom: 5px; font-weight:bold; font-size: 0.85rem;">Web Fetch URL:</label>
@@ -123,21 +126,25 @@
 
             <div class="card">
                 <h2>Session Management</h2>
+                <div class="session-id-display">
+                    Session: <span id="current-session-id">-</span>
+                </div>
+                <div id="session-stats" class="model-info" style="margin-bottom: 10px;">
+                    Messages: <span id="msg-count">0</span> | Tokens: <span id="token-count">~0</span>
+                </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                    <button onclick="exportSession()" style="background: #28a745; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Export</button>
-                    <button onclick="importSession()" style="background: #17a2b8; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Import</button>
-                    <button onclick="clearHistory()" style="background: #dc3545; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px; grid-column: span 2;">Clear History</button>
+                    <button onclick="createNewSession()" style="background: #28a745; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">New Session</button>
+                    <button onclick="toggleSessionList()" style="background: #17a2b8; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Sessions</button>
+                    <button onclick="exportSession()" style="background: #6c757d; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Export</button>
+                    <button onclick="deleteCurrentSession()" style="background: #dc3545; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Delete</button>
                 </div>
-                <input type="file" id="import-file" style="display:none;" onchange="handleImport(this)">
-                <div id="session-info" class="model-info" style="margin-top: 10px;">
-                    Messages in context: <span id="msg-count">0</span>
-                </div>
+                <div id="session-list" style="display:none; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
             </div>
 
             <div class="card">
-                <h2>System Status 
+                <h2>System Status
                     <div style="float: right; display: flex; gap: 5px;">
-                        <button onclick="probeKeys()" id="probe-btn" style="padding: 2px 8px; font-size: 0.7rem; background: #28a745; border:none; color:white; border-radius:4px; cursor:pointer;" title="모든 키 강제 재검증 및 복구">강제 재검증</button>
+                        <button onclick="probeKeys()" id="probe-btn" style="padding: 2px 8px; font-size: 0.7rem; background: #28a745; border:none; color:white; border-radius:4px; cursor:pointer;" title="강제 재검증">재검증</button>
                         <button onclick="refreshStatus()" style="padding: 2px 8px; font-size: 0.7rem; background: #6c757d; border:none; color:white; border-radius:4px; cursor:pointer;">새로고침</button>
                     </div>
                 </h2>
@@ -149,8 +156,8 @@
             <div class="card">
                 <h2>Raw API Result</h2>
                 <div style="display: flex; gap: 4px; margin-bottom: 10px;">
-                    <button onclick="showRawTab('request')" id="tab-request" class="raw-tab raw-tab-active" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px; cursor:pointer;">Request (입력)</button>
-                    <button onclick="showRawTab('response')" id="tab-response" class="raw-tab" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px; cursor:pointer; background:#f8f9fa; color:#666;">Response (결과)</button>
+                    <button onclick="showRawTab('request')" id="tab-request" class="raw-tab raw-tab-active" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px; cursor:pointer;">Request</button>
+                    <button onclick="showRawTab('response')" id="tab-response" class="raw-tab" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px; cursor:pointer; background:#f8f9fa; color:#666;">Response</button>
                 </div>
                 <pre class="raw-json" id="raw-request" style="max-height:300px; overflow-y:auto;">{}</pre>
                 <pre class="raw-json" id="raw-response" style="max-height:300px; overflow-y:auto; display:none;">{}</pre>
@@ -160,8 +167,133 @@
 
     <script>
         let availableModels = [];
-        let chatMessages = [];
+        let chatMessages = [];  // UI 표시용 로컬 메시지 (서버 세션과 별도)
+        let currentSessionId = null;
         let onboardingData = { completed: true, available_models: [] };
+
+        // ─── Session Management ───
+
+        async function initSession() {
+            // localStorage에서 기존 세션 복원 시도
+            const savedId = localStorage.getItem('hydra_session_id');
+            if (savedId) {
+                try {
+                    const res = await fetch(`/v1/admin/sessions/${savedId}`);
+                    if (res.ok) {
+                        const info = await res.json();
+                        currentSessionId = savedId;
+                        updateSessionDisplay(info);
+                        // 서버에서 히스토리 복원 — UI에 표시
+                        await loadSessionHistory();
+                        return;
+                    }
+                } catch (e) { /* 세션 만료, 새로 생성 */ }
+            }
+            await createNewSession();
+        }
+
+        async function createNewSession() {
+            try {
+                const res = await fetch('/v1/admin/sessions/new', { method: 'POST' });
+                const data = await res.json();
+                currentSessionId = data.session_id;
+                localStorage.setItem('hydra_session_id', currentSessionId);
+                chatMessages = [];
+                document.getElementById('chat-history').innerHTML = '';
+                addMessageToUI('system', 'New session started.', false);
+                updateSessionDisplay({ message_count: 0, estimated_tokens: 0 });
+            } catch (e) {
+                console.error('Failed to create session:', e);
+            }
+        }
+
+        async function loadSessionHistory() {
+            // 서버에서 세션 컨텍스트를 가져와 UI에 복원
+            // 세션 상세에서 메시지 수 확인 후, 기본적으로 로컬 chatMessages 비우고 재구성
+            chatMessages = [];
+            document.getElementById('chat-history').innerHTML = '';
+            addMessageToUI('system', `Session resumed: ${currentSessionId.substring(0, 16)}...`, false);
+        }
+
+        async function switchSession(sessionId) {
+            currentSessionId = sessionId;
+            localStorage.setItem('hydra_session_id', sessionId);
+            try {
+                const res = await fetch(`/v1/admin/sessions/${sessionId}`);
+                if (res.ok) {
+                    const info = await res.json();
+                    updateSessionDisplay(info);
+                    await loadSessionHistory();
+                }
+            } catch (e) {
+                console.error('Failed to switch session:', e);
+            }
+        }
+
+        async function deleteCurrentSession() {
+            if (!currentSessionId || !confirm('현재 세션을 삭제하시겠습니까?')) return;
+            try {
+                await fetch(`/v1/admin/sessions/${currentSessionId}`, { method: 'DELETE' });
+                localStorage.removeItem('hydra_session_id');
+                await createNewSession();
+            } catch (e) { alert('삭제 실패: ' + e.message); }
+        }
+
+        async function toggleSessionList() {
+            const listEl = document.getElementById('session-list');
+            if (listEl.style.display === 'none') {
+                listEl.style.display = 'block';
+                try {
+                    const res = await fetch('/v1/admin/sessions');
+                    const sessions = await res.json();
+                    listEl.innerHTML = sessions.length === 0
+                        ? '<div style="font-size:0.8rem; color:#999; text-align:center;">No sessions</div>'
+                        : sessions.map(s => `
+                            <div class="session-item ${s.session_id === currentSessionId ? 'active' : ''}"
+                                 onclick="switchSession('${s.session_id}')">
+                                <div>
+                                    <div style="font-weight:bold;">${s.title || 'Session'}</div>
+                                    <div style="font-size:0.65rem; color:#999;">${s.session_id.substring(0, 16)}... | ${s.message_count} msgs</div>
+                                </div>
+                                <div style="font-size:0.65rem; color:#aaa;">${new Date(s.updated_at).toLocaleString('ko')}</div>
+                            </div>
+                        `).join('');
+                } catch (e) { listEl.innerHTML = '<div style="color:red; font-size:0.8rem;">Load failed</div>'; }
+            } else {
+                listEl.style.display = 'none';
+            }
+        }
+
+        function updateSessionDisplay(info) {
+            document.getElementById('current-session-id').textContent = currentSessionId ? currentSessionId.substring(0, 20) + '...' : '-';
+            document.getElementById('msg-count').textContent = info.message_count || 0;
+            document.getElementById('token-count').textContent = '~' + (info.estimated_tokens || 0);
+        }
+
+        async function refreshSessionStats() {
+            if (!currentSessionId) return;
+            try {
+                const res = await fetch(`/v1/admin/sessions/${currentSessionId}`);
+                if (res.ok) {
+                    const info = await res.json();
+                    updateSessionDisplay(info);
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        function exportSession() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({
+                session_id: currentSessionId,
+                messages: chatMessages,
+                exported_at: new Date().toISOString()
+            }, null, 2));
+            const dl = document.createElement('a');
+            dl.setAttribute("href", dataStr);
+            dl.setAttribute("download", `session_${currentSessionId || 'unknown'}.json`);
+            dl.click();
+        }
+
+        // ─── Raw Tab ───
 
         function showRawTab(tab) {
             const reqEl = document.getElementById('raw-request');
@@ -169,21 +301,18 @@
             const tabReq = document.getElementById('tab-request');
             const tabRes = document.getElementById('tab-response');
             if (tab === 'request') {
-                reqEl.style.display = 'block';
-                resEl.style.display = 'none';
+                reqEl.style.display = 'block'; resEl.style.display = 'none';
                 tabReq.className = 'raw-tab raw-tab-active';
-                tabRes.className = 'raw-tab';
-                tabRes.style.background = '#f8f9fa'; tabRes.style.color = '#666';
+                tabRes.className = 'raw-tab'; tabRes.style.background = '#f8f9fa'; tabRes.style.color = '#666';
             } else {
-                reqEl.style.display = 'none';
-                resEl.style.display = 'block';
+                reqEl.style.display = 'none'; resEl.style.display = 'block';
                 tabRes.className = 'raw-tab raw-tab-active';
-                tabReq.className = 'raw-tab';
-                tabReq.style.background = '#f8f9fa'; tabReq.style.color = '#666';
+                tabReq.className = 'raw-tab'; tabReq.style.background = '#f8f9fa'; tabReq.style.color = '#666';
             }
         }
 
-        // Configure marked to use highlight.js
+        // ─── Markdown ───
+
         marked.setOptions({
             highlight: function(code, lang) {
                 const language = hljs.getLanguage(lang) ? lang : 'plaintext';
@@ -192,13 +321,13 @@
             langPrefix: 'hljs language-'
         });
 
+        // ─── Onboarding ───
+
         async function checkOnboarding() {
             try {
                 const response = await fetch('/v1/admin/onboarding');
                 onboardingData = await response.json();
-                if (!onboardingData.completed) {
-                    showOnboarding();
-                }
+                if (!onboardingData.completed) showOnboarding();
             } catch (e) { console.error('Onboarding check failed:', e); }
         }
 
@@ -210,11 +339,10 @@
             const models = onboardingData.available_models || [];
             const cloudModels = models.filter(m => m.owned_by !== 'local-agent');
             const localModels = models.filter(m => m.owned_by === 'local-agent');
-            
             if (cloudModels.length > 0) {
                 html += '<div class="onboarding-section-title">Cloud Models</div>';
                 cloudModels.forEach(m => {
-                    html += `<label class="onboarding-item"><input type="checkbox" name="model-select" value="${m.id}" checked><div><strong>${m.display_name || m.id}</strong><div style="font-size:0.7rem; color:#666;">${m.owned_by} • Tier: ${m.tier}</div></div></label>`;
+                    html += `<label class="onboarding-item"><input type="checkbox" name="model-select" value="${m.id}" checked><div><strong>${m.display_name || m.id}</strong><div style="font-size:0.7rem; color:#666;">${m.owned_by} | Tier: ${m.tier}</div></div></label>`;
                 });
             }
             if (localModels.length > 0) {
@@ -243,6 +371,8 @@
             } catch (e) { alert('Save failed: ' + e.message); }
         }
 
+        // ─── Models ───
+
         async function loadModels() {
             const select = document.getElementById('model-select');
             try {
@@ -250,15 +380,13 @@
                 const data = await response.json();
                 availableModels = data.data || [];
                 select.innerHTML = '';
-                
                 const globalAuto = availableModels.find(m => m.id === 'auto');
                 if (globalAuto) {
                     const opt = document.createElement('option');
                     opt.value = globalAuto.id;
-                    opt.textContent = `✨ ${globalAuto.display_name}`;
+                    opt.textContent = `Auto (${globalAuto.display_name})`;
                     select.appendChild(opt);
                 }
-
                 const cloudModels = availableModels.filter(m => m.owned_by !== 'local-agent' && m.owned_by !== 'gateway');
                 const localModels = availableModels.filter(m => m.owned_by === 'local-agent');
                 const tierOrder = { 'free': 0, 'experimental': 1, 'standard': 2, 'premium': 3 };
@@ -270,12 +398,10 @@
                     if (tierA !== tierB) return tierA - tierB;
                     return a.id.localeCompare(b.id);
                 };
-
                 const addGroup = (label, models) => {
                     if (models.length === 0) return;
                     const group = document.createElement('optgroup');
                     group.label = label;
-                    
                     models.sort(sorter).forEach(m => {
                         if (m.id === 'auto') return;
                         const opt = document.createElement('option');
@@ -288,7 +414,6 @@
                     });
                     select.appendChild(group);
                 };
-
                 addGroup('Cloud Models', cloudModels);
                 addGroup('Local Agents', localModels);
                 updateModelInfo();
@@ -311,6 +436,8 @@
             }
         }
 
+        // ─── Status ───
+
         async function refreshStatus() {
             const statusDiv = document.getElementById('status-content');
             try {
@@ -321,7 +448,6 @@
                 const providers = statusObj.providers || {};
                 const agents = statusObj.agents || {};
                 const keyStats = data.key_statistics || {};
-                
                 html += '<div style="font-weight:bold; font-size:0.85rem; color:#333;">Cloud Providers</div>';
                 for (const [name, info] of Object.entries(providers)) {
                     const statusClass = info.healthy ? 'status-healthy' : 'status-unhealthy';
@@ -340,8 +466,7 @@
         async function probeKeys() {
             const btn = document.getElementById('probe-btn');
             const originalText = btn.innerText;
-            btn.disabled = true;
-            btn.innerText = '...';
+            btn.disabled = true; btn.innerText = '...';
             try {
                 await fetch('/v1/admin/probe', { method: 'POST' });
                 alert('재검증 시작됨');
@@ -350,78 +475,23 @@
             finally { btn.disabled = false; btn.innerText = originalText; }
         }
 
-        function initHistory() {
-            const saved = localStorage.getItem('m_llm_h');
-            if (saved) {
-                try {
-                    chatMessages = JSON.parse(saved);
-                    renderAllMessages();
-                } catch (e) { chatMessages = []; }
-            } else { addMessageToUI('assistant', 'Welcome!', false); }
-            updateMessageCount();
-        }
-
-        function saveHistory() {
-            localStorage.setItem('m_llm_h', JSON.stringify(chatMessages));
-            updateMessageCount();
-        }
-
-        function updateMessageCount() { document.getElementById('msg-count').innerText = chatMessages.length; }
-
-        function clearHistory() {
-            if (confirm('Clear?')) {
-                chatMessages = [];
-                localStorage.removeItem('m_llm_h');
-                document.getElementById('chat-history').innerHTML = '';
-                addMessageToUI('assistant', 'Cleared.', false);
-                updateMessageCount();
-            }
-        }
-
-        function exportSession() {
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(chatMessages, null, 2));
-            const dl = document.createElement('a');
-            dl.setAttribute("href", dataStr);
-            dl.setAttribute("download", "session.json");
-            dl.click();
-        }
-
-        function importSession() { document.getElementById('import-file').click(); }
-
-        function handleImport(input) {
-            const file = input.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const imported = JSON.parse(e.target.result);
-                    if (Array.isArray(imported)) {
-                        chatMessages = imported;
-                        saveHistory();
-                        renderAllMessages();
-                    }
-                } catch (err) { alert('Error: ' + err.message); }
-            };
-            reader.readAsText(file);
-        }
-
-        function renderAllMessages() {
-            const history = document.getElementById('chat-history');
-            history.innerHTML = '';
-            chatMessages.forEach(msg => addMessageToUI(msg.role, msg.content, false));
-            history.scrollTop = history.scrollHeight;
-        }
+        // ─── UI Message Helpers ───
 
         function addMessageToUI(role, content, save = true) {
             const history = document.getElementById('chat-history');
             const msgDiv = document.createElement('div');
-            msgDiv.className = `message ${role}-message ${role === 'assistant' ? 'markdown-body' : ''}`;
+            const cssClass = role === 'system' ? 'system-message' : (role === 'user' ? 'user-message' : 'bot-message');
+            msgDiv.className = `message ${cssClass} ${role === 'assistant' ? 'markdown-body' : ''}`;
             if (role === 'assistant') msgDiv.innerHTML = marked.parse(content);
             else msgDiv.textContent = content;
             history.appendChild(msgDiv);
             history.scrollTop = history.scrollHeight;
-            if (save) { chatMessages.push({ role, content }); saveHistory(); }
+            if (save && role !== 'system') {
+                chatMessages.push({ role, content });
+            }
         }
+
+        // ─── Send Message (서버 세션 기반) ───
 
         async function sendMessage() {
             const input = document.getElementById('user-input');
@@ -434,10 +504,12 @@
             const webFetch = webFetchInput ? webFetchInput.value.trim() : null;
             const temp = parseFloat(document.getElementById('temp-input').value);
             if (!input.value.trim()) return;
+
             const text = input.value;
             input.value = '';
             addMessageToUI('user', text);
             btn.disabled = true;
+
             const history = document.getElementById('chat-history');
             const loadingMsg = document.createElement('div');
             loadingMsg.className = 'message bot-message loading';
@@ -445,17 +517,18 @@
             history.appendChild(loadingMsg);
             history.scrollTop = history.scrollHeight;
 
+            // 서버 세션 기반: 새 메시지만 전송 + session_id
             const requestBody = {
                 model: model,
-                messages: chatMessages,
+                messages: [{ role: 'user', content: text }],
                 temperature: temp,
                 has_search: search,
                 auto_web_fetch: autoFetch,
                 compress_context: compressCtx,
+                session_id: currentSessionId,
                 web_fetch: webFetch || undefined
             };
 
-            // RAW Request 표시
             document.getElementById('raw-request').textContent = JSON.stringify(requestBody, null, 2);
 
             try {
@@ -466,7 +539,6 @@
                 });
                 const data = await response.json();
 
-                // RAW Response 표시: _gateway_debug가 있으면 분리하여 Request(After)에 표시
                 if (data._gateway_debug) {
                     const debug = data._gateway_debug;
                     document.getElementById('raw-request').textContent = JSON.stringify({
@@ -481,20 +553,21 @@
                 }
 
                 if (history.contains(loadingMsg)) history.removeChild(loadingMsg);
+
                 if (response.ok) {
-                    const content = (data.choices && data.choices[0] && data.choices[0].message) ? data.choices[0].message.content : "No response";
+                    const content = (data.choices && data.choices[0] && data.choices[0].message)
+                        ? data.choices[0].message.content : "No response";
                     const botMsg = document.createElement('div');
                     botMsg.className = 'message bot-message markdown-body';
                     botMsg.innerHTML = marked.parse(content);
                     if (data.usage && (data.usage.gateway_key_id || data.usage.gateway_model)) {
                         const meta = document.createElement('div');
-                        meta.style.fontSize = '0.65rem'; meta.style.color = '#999'; meta.style.marginTop = '12px'; meta.style.paddingTop = '8px'; meta.style.borderTop = '1px solid #eee';
-                        meta.innerHTML = `⚙️ <strong>${data.usage.gateway_model || ''}</strong> via <code>${data.usage.gateway_key_id || 'unknown'}</code>`;
+                        meta.style.cssText = 'font-size:0.65rem; color:#999; margin-top:12px; padding-top:8px; border-top:1px solid #eee;';
+                        meta.innerHTML = `<strong>${data.usage.gateway_model || ''}</strong> via <code>${data.usage.gateway_key_id || 'unknown'}</code>`;
                         botMsg.appendChild(meta);
                     }
                     history.appendChild(botMsg);
                     chatMessages.push({ role: 'assistant', content: content });
-                    saveHistory();
                 } else {
                     const errMsg = document.createElement('div');
                     errMsg.className = 'message bot-message status-unhealthy';
@@ -511,11 +584,14 @@
                 btn.disabled = false;
                 history.scrollTop = history.scrollHeight;
                 refreshStatus();
+                refreshSessionStats();
             }
         }
 
-        window.onload = function() {
-            initHistory();
+        // ─── Init ───
+
+        window.onload = async function() {
+            await initSession();
             checkOnboarding();
             loadModels();
             refreshStatus();

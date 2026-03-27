@@ -4,6 +4,7 @@ from typing import Any, cast
 from src.domain.enums import AgentType, ModelType, ProviderType, RoutingReason
 from src.domain.interfaces import IContextAnalyzer
 from src.domain.models import ChatRequest, RoutingDecision
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -13,20 +14,13 @@ class ContextAnalyzer(IContextAnalyzer):
         self._logger = logging.getLogger(__name__)
         self._max_tokens_fast_model = max_tokens_fast_model
 
-        from src.core.config import settings
-
         self._free_models = self._parse_config_list(settings.free_models)
         self._premium_models = self._parse_config_list(settings.premium_models)
         self._default_free_model = settings.default_free_model
         self._default_premium_model = settings.default_premium_model
+        self._provider_priority = self._parse_config_list(settings.provider_priority)
 
         self._model_mapping: dict[str, ModelType | str] = {
-            "gemini-3.1-pro": ModelType.GEMINI_3_1_PRO,
-            "gemini-3.1-ultra": ModelType.GEMINI_3_1_ULTRA,
-            "gemini-3.0-pro": ModelType.GEMINI_3_PRO,
-            "gemini-3.0-flash": ModelType.GEMINI_3_FLASH,
-            "gemini-3.0-flash-lite": ModelType.GEMINI_3_FLASH_LITE,
-            "gemini-3.1-flash-lite": ModelType.GEMINI_3_1_FLASH_LITE,
             "gemini-2.5-flash": ModelType.GEMINI_2_5_FLASH,
             "gemini-2.0-pro": ModelType.GEMINI_2_0_PRO,
             "gemini-2.0-flash": ModelType.GEMINI_2_0_FLASH,
@@ -36,6 +30,7 @@ class ContextAnalyzer(IContextAnalyzer):
             "gemini-pro": ModelType.GEMINI_PRO,
             "gemini-flash": ModelType.GEMINI_FLASH,
             "gemini-pro-vision": ModelType.GEMINI_PRO_VISION,
+            "gemini-flash-vision": ModelType.GEMINI_FLASH_VISION,
             "llama-4-70b": ModelType.GROQ_LLAMA_4_70B,
             "llama-4-8b": ModelType.GROQ_LLAMA_4_8B,
             "llama-3.3-70b": ModelType.GROQ_LLAMA_3_3_70B,
@@ -138,15 +133,74 @@ class ContextAnalyzer(IContextAnalyzer):
         model = routing_strategy["model"]
         model_name = model.value if hasattr(model, "value") else str(model)
 
+        web_required = self.detect_web_intent(request)
+
         decision = RoutingDecision(
             provider=routing_strategy.get("provider"),
             agent=routing_strategy.get("agent"),
             model_name=model_name,
             reason=routing_strategy["reason"],
             confidence=1.0,
+            web_search_required=web_required,
         )
 
         return decision
+
+    def detect_web_intent(self, request: ChatRequest) -> bool:
+        if request.has_search or request.web_fetch:
+            return True
+
+        content_text = ""
+        if request.messages:
+            last_msg = request.messages[-1]
+            if isinstance(last_msg.content, str):
+                content_text = last_msg.content
+            elif isinstance(last_msg.content, list):
+                for part in last_msg.content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        content_text += part.get("text", "")
+
+        if not content_text:
+            return False
+
+        content_lower = content_text.lower()
+
+        import re
+
+        if re.search(r"https?://[^\s/$.?#].[^\sㄱ-ㅎㅏ-ㅣ가-힣]*", content_text):
+            return True
+
+        site_keywords = [
+            "래터박스",
+            "레터박스",
+            "letterboxd",
+            "네이버",
+            "naver",
+            "나무위키",
+            "위키백과",
+            "유튜브",
+            "youtube",
+            "구글",
+            "google",
+            "reddit",
+            "레딧",
+            "github",
+            "깃허브",
+            "뉴스",
+            "오늘",
+            "실시간",
+            "가져와",
+            "찾아줘",
+            "검색",
+            "정보",
+            "어때",
+            "뭐야",
+        ]
+
+        if any(s in content_lower for s in site_keywords):
+            return True
+
+        return False
 
     def _parse_model_hint(self, model_hint: str | None) -> ModelType | str | None:
         if not model_hint:
@@ -221,17 +275,70 @@ class ContextAnalyzer(IContextAnalyzer):
                 "reason": RoutingReason.IMAGE_PRESENT.value,
             }
 
-        # 토큰 기반 2단계 라우팅: 짧은 요청→GROQ, 장문→GEMINI
-        # GROQ/Cerebras 모두 context limit이 8192이므로 동일 기준 적용
+        preferred_external = [
+            p for p in self._provider_priority if p in ["gemini", "groq", "cerebras"]
+        ]
+
         fast_threshold = self._max_tokens_fast_model
 
         if estimated_tokens < fast_threshold:
+            if "groq" in self._provider_priority:
+                has_groq = available_tiers and available_tiers.get(ProviderType.GROQ)
+                if has_groq:
+                    return {
+                        "provider": ProviderType.GROQ,
+                        "model": ModelType.GROQ_LLAMA_3_3_70B,
+                        "reason": RoutingReason.TOKEN_COUNT.value,
+                    }
+
+            for p_name in preferred_external:
+                p_type = ProviderType(p_name)
+                if available_tiers and available_tiers.get(p_type):
+                    target_model = (
+                        self._default_free_model
+                        if p_type == ProviderType.GEMINI
+                        else self._get_default_model_for_provider(p_type)
+                    )
+                    return {
+                        "provider": p_type,
+                        "model": target_model,
+                        "reason": RoutingReason.TOKEN_COUNT.value,
+                    }
+
             return {
                 "provider": ProviderType.GROQ,
                 "model": ModelType.GROQ_LLAMA_3_3_70B,
                 "reason": RoutingReason.TOKEN_COUNT.value,
             }
         else:
+            if "gemini" in self._provider_priority:
+                has_gemini = available_tiers and available_tiers.get(
+                    ProviderType.GEMINI
+                )
+                if has_gemini:
+                    has_premium_gemini = "premium" in available_tiers.get(
+                        ProviderType.GEMINI, set()
+                    )
+                    target_model = (
+                        self._default_premium_model
+                        if has_premium_gemini
+                        else self._default_free_model
+                    )
+                    return {
+                        "provider": ProviderType.GEMINI,
+                        "model": target_model,
+                        "reason": RoutingReason.TOKEN_COUNT.value,
+                    }
+
+            for p_name in preferred_external:
+                p_type = ProviderType(p_name)
+                if available_tiers and available_tiers.get(p_type):
+                    return {
+                        "provider": p_type,
+                        "model": self._get_default_model_for_provider(p_type),
+                        "reason": RoutingReason.TOKEN_COUNT.value,
+                    }
+
             has_premium_gemini = available_tiers and "premium" in available_tiers.get(
                 ProviderType.GEMINI, set()
             )
@@ -247,16 +354,17 @@ class ContextAnalyzer(IContextAnalyzer):
                 "reason": RoutingReason.TOKEN_COUNT.value,
             }
 
-    def _get_target_for_model(
-        self, model: ModelType | str
-    ) -> ProviderType | AgentType:
+    def _get_default_model_for_provider(self, provider: ProviderType) -> str:
+        if provider == ProviderType.GEMINI:
+            return self._default_free_model
+        if provider == ProviderType.GROQ:
+            return ModelType.GROQ_LLAMA_3_3_70B.value
+        if provider == ProviderType.CEREBRAS:
+            return ModelType.CEREBRAS_LLAMA.value
+        return "auto"
+
+    def _get_target_for_model(self, model: ModelType | str) -> ProviderType | AgentType:
         model_to_target: dict[ModelType, ProviderType | AgentType] = {
-            ModelType.GEMINI_3_1_PRO: ProviderType.GEMINI,
-            ModelType.GEMINI_3_1_ULTRA: ProviderType.GEMINI,
-            ModelType.GEMINI_3_PRO: ProviderType.GEMINI,
-            ModelType.GEMINI_3_FLASH: ProviderType.GEMINI,
-            ModelType.GEMINI_3_FLASH_LITE: ProviderType.GEMINI,
-            ModelType.GEMINI_3_1_FLASH_LITE: ProviderType.GEMINI,
             ModelType.GEMINI_2_5_FLASH: ProviderType.GEMINI,
             ModelType.GEMINI_2_0_PRO: ProviderType.GEMINI,
             ModelType.GEMINI_2_0_FLASH: ProviderType.GEMINI,
@@ -420,8 +528,6 @@ class ContextAnalyzer(IContextAnalyzer):
         }
 
     def get_supported_models_info(self) -> list[dict[str, Any]]:
-        from src.core.config import settings
-
         enabled_list = self._parse_config_list(settings.enabled_models)
 
         models_info = self._get_virtual_models()

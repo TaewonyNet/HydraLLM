@@ -1,20 +1,20 @@
 import asyncio
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 from ..adapters.providers.gemini import GeminiAdapter
 from ..adapters.providers.local_cli import LocalCLIAdapter
 from ..adapters.providers.openai_compat import OpenAICompatAdapter
 from ..core.config import settings
-from ..core.exceptions import ResourceExhaustedError
-from ..domain.enums import AgentType, ProviderType
+from ..core.exceptions import RateLimitError, ResourceExhaustedError
+from ..domain.enums import AgentType, ProviderType, TierType
 from ..domain.interfaces import ILLMProvider, IRouter
 from ..domain.models import ChatMessage, ChatRequest, ChatResponse, RoutingDecision
 from .analyzer import ContextAnalyzer
 from .compressor import ContextCompressor
 from .key_manager import KeyManager
-from .scraper import WebScraper
+from .scraper import ScrapeMode, WebScraper
 from .session_manager import SessionManager
 
 
@@ -37,10 +37,10 @@ class Gateway(IRouter):
         self._logger = logging.getLogger(__name__)
 
     def initialize_settings(self) -> None:
-        from src.core.config import settings
-
-        onboarding = self.session_manager.get_setting("onboarding_completed", False)
-        enabled = self.session_manager.get_setting("enabled_models", None)
+        onboarding = self.session_manager._get_setting_sync(
+            "onboarding_completed", False
+        )
+        enabled = self.session_manager._get_setting_sync("enabled_models", None)
 
         settings.onboarding_completed = onboarding
         settings.enabled_models = enabled
@@ -60,7 +60,6 @@ class Gateway(IRouter):
             msg = "Either 'messages' or 'prompt' must be provided"
             raise ValueError(msg)
 
-        # per-request 오버라이드 → 서버 기본값 fallback
         do_auto_fetch = (
             request.auto_web_fetch
             if request.auto_web_fetch is not None
@@ -72,26 +71,37 @@ class Gateway(IRouter):
             else settings.enable_context_compression
         )
 
+        # ─── 세션 관리: load context → 새 메시지만 추가 ───
         if request.session_id:
-            history = self.session_manager.get_history(request.session_id)
-            if history:
-                request.messages = self._merge_messages(history, request.messages)
+            # 서버 DB에서 compaction 경계 이후 히스토리 로드
+            history = await self.session_manager.load_context(request.session_id)
 
-            user_msg = request.messages[-1]
-            if user_msg.role == "user":
-                self.session_manager.save_message(
-                    request.session_id, user_msg.role, user_msg.content
+            # 새 user 메시지를 DB에 저장
+            new_user_msgs = [m for m in request.messages if m.role == "user"]
+            if new_user_msgs:
+                last_user = new_user_msgs[-1]
+                await self.session_manager.save_message(
+                    request.session_id, last_user.role, last_user.content
                 )
 
-        # 세션 히스토리가 길면 LLMLingua-2로 압축하여 GPT처럼 세션 유지
+            # 히스토리 + 새 메시지 조립 (중복 제거)
+            if history:
+                seen = set()
+                merged: list[ChatMessage] = []
+                for msg in history + request.messages:
+                    key = (msg.role, str(msg.content).strip()[:200])
+                    if key not in seen:
+                        merged.append(msg)
+                        seen.add(key)
+                request.messages = merged
+
         if do_compress and len(request.messages) > 4:
             estimated = request.estimate_token_count()
             if estimated > settings.max_tokens_fast_model:
-                self._logger.info(
-                    f"🗜️ Compressing session history: {estimated} tokens estimated, "
-                    f"{len(request.messages)} messages"
+                self._logger.info(f"🗜️ Compressing session history: {estimated} tokens")
+                request.messages = await self._compress_session_history(
+                    request.messages
                 )
-                request.messages = self._compress_session_history(request.messages)
 
         content_text = ""
         last_msg = request.messages[-1]
@@ -103,47 +113,98 @@ class Gateway(IRouter):
                     if isinstance(part, dict) and part.get("type") == "text":
                         content_text += part.get("text", "")
 
-        # URL 자동 감지: 프롬프트에 URL이 있으면 자동으로 web_fetch
-        urls_to_fetch = []
-        if do_auto_fetch and content_text:
-            urls_to_fetch = re.findall(r"https?://[^\s/$.?#].[^\s]*", content_text)
+        web_required = self.analyzer.detect_web_intent(request)
+        self._logger.info(
+            f"Analysis: web_required={web_required}, auto_fetch={do_auto_fetch}"
+        )
+
+        # 1) URL 추출: do_auto_fetch이거나, web_intent가 있으면 URL 감지
+
+        urls_to_fetch: list[str] = []
+        if (do_auto_fetch or web_required) and content_text:
+            urls_to_fetch = re.findall(
+                r"https?://[^\s/$.?#].[^\sㄱ-ㅎㅏ-ㅣ가-힣]*", content_text
+            )
 
         if request.web_fetch and request.web_fetch not in urls_to_fetch:
             urls_to_fetch.append(request.web_fetch)
 
-        context_blocks = []
+        scrape_mode = cast(ScrapeMode, settings.default_scrape_mode)
+
+        # 2) URL이 있으면 개별 fetch
+        context_blocks: list[str] = []
         for url in urls_to_fetch:
             self._logger.info(f"🌐 Fetching content for: {url}")
-            raw_content = await self.scraper.scrape_url(
-                url,
-                mode=settings.default_scrape_mode,  # type: ignore
-            )
-
-            if do_compress:
-                self._logger.info(f"🗜️ Compressing fetched content for {url}")
-                raw_content = self.compressor.compress(
-                    raw_content, instruction=f"Focus on {content_text}"
+            try:
+                raw_content = await self.scraper.scrape_url(
+                    url,
+                    mode=scrape_mode,
                 )
 
-            context_blocks.append(
-                f"--- START CONTENT FROM {url} ---\n{raw_content}\n--- END CONTENT ---"
-            )
+                if raw_content and not any(
+                    err in raw_content for err in ["Failed to fetch", "Error scraping"]
+                ):
+                    if do_compress:
+                        self._logger.info(f"🗜️ Compressing fetched content for {url}")
+                        raw_content = self.compressor.compress(
+                            raw_content, instruction=f"Focus on {content_text}"
+                        )
 
-        if request.has_search and not context_blocks and content_text:
+                    context_blocks.append(
+                        f"--- SOURCE URL: {url} ---\n{raw_content}\n--- END CONTENT ---"
+                    )
+                else:
+                    self._logger.warning(f"⚠️ Fetch failed or returned empty for {url}")
+                    context_blocks.append(
+                        f"--- SOURCE URL: {url} ---\n[STATUS: FETCH_FAILED]\n--- END CONTENT ---"
+                    )
+            except Exception as e:
+                self._logger.error(f"❌ Error fetching {url}: {e}")
+                context_blocks.append(
+                    f"--- SOURCE URL: {url} ---\n[STATUS: ERROR: {str(e)}]\n--- END CONTENT ---"
+                )
+
+        # 3) 검색 트리거: has_search 플래그, 또는 web_intent인데 URL fetch 결과가 없을 때
+        should_trigger_search = bool(request.has_search)
+        if (
+            not should_trigger_search
+            and not context_blocks
+            and content_text
+            and web_required
+        ):
+            should_trigger_search = True
+            self._logger.info(f"🔍 Auto-detected web intent: {content_text[:50]}...")
+
+        if should_trigger_search and not context_blocks and content_text:
             self._logger.info(f"🔍 Performing web search for: {content_text[:50]}...")
-            search_results = await self.scraper.search_and_scrape(
-                content_text,
-                mode=settings.default_scrape_mode,  # type: ignore
-            )
-
-            if do_compress:
-                search_results = self.compressor.compress(
-                    search_results, instruction=content_text
+            try:
+                search_results = await self.scraper.search_and_scrape(
+                    content_text,
+                    mode=scrape_mode,
                 )
 
-            context_blocks.append(
-                f"--- START SEARCH RESULTS ---\n{search_results}\n--- END SEARCH RESULTS ---"
-            )
+                if search_results and "No search results found" not in search_results:
+                    if do_compress:
+                        self._logger.info("🗜️ Compressing search results")
+                        search_results = self.compressor.compress(
+                            search_results, instruction=content_text
+                        )
+
+                    context_blocks.append(
+                        f"--- WEB SEARCH RESULTS ---\n{search_results}\n--- END SEARCH RESULTS ---"
+                    )
+                    self._logger.info("✅ Web search results successfully integrated")
+                else:
+                    self._logger.warning("⚠️ Web search returned no useful results")
+                    context_blocks.append(
+                        "--- WEB SEARCH RESULTS ---\n[STATUS: NO_RESULTS_FOUND]\n--- END SEARCH RESULTS ---"
+                    )
+            except Exception as e:
+                self._logger.error(f"❌ Web search failed: {e}")
+                context_blocks.append(
+                    f"--- WEB SEARCH RESULTS ---\n[STATUS: ERROR: {str(e)}]\n--- END SEARCH RESULTS ---"
+                )
+
             request.has_search = False
 
         if context_blocks:
@@ -152,14 +213,16 @@ class Gateway(IRouter):
                 0,
                 ChatMessage(
                     role="system",
-                    content="YOU ARE A HELPFUL ASSISTANT WITH ACCESS TO WEB CONTENT.\n"
-                    "The following real-time data was retrieved to help answer the user's request. "
-                    "Treat this as the primary factual source.\n\n" + combined_context,
+                    content="[REAL-TIME WEB CONTEXT ENABLED]\n"
+                    "The system has attempted to retrieve real-time information from the web to answer your request. "
+                    "Below is the retrieved data. Successful retrievals should be treated as the primary factual source. "
+                    "If a retrieval shows [STATUS: FETCH_FAILED] or [STATUS: NO_RESULTS_FOUND], inform the user that you tried to access the web but couldn't get the data.\n\n"
+                    + combined_context,
                     name=None,
                 ),
             )
 
-            if hasattr(request, "tools") and request.tools:
+            if request.tools:
                 request.tools = [
                     t
                     for t in request.tools
@@ -177,72 +240,31 @@ class Gateway(IRouter):
         decision = await self.analyzer.analyze(request, available_tiers=available_tiers)
 
         if settings.debug:
-            self._logger.debug(f"ROUTING DECISION: {decision}")
+            self._logger.debug(
+                f"FULL REQUEST BODY: {request.model_dump_json(indent=2)}"
+            )
 
         response = await self._process_with_retries(request, decision)
 
+        # ─── 응답 후 세션 저장 + overflow 체크 ───
         if request.session_id and response and response.choices:
-            self.session_manager.save_message(
+            await self.session_manager.save_message(
                 request.session_id, "assistant", response.choices[0].message.content
             )
 
-        return response
+            # 토큰 overflow 감지 → compaction 트리거
+            if do_compress and self.session_manager.is_overflow(request.session_id):
+                self._logger.info(
+                    f"🗜️ Session {request.session_id} overflow detected, compacting..."
+                )
+                await self.session_manager.compact(request.session_id, self.compressor)
 
-    def _compress_session_history(
-        self, messages: list[ChatMessage]
-    ) -> list[ChatMessage]:
-        """오래된 메시지를 LLMLingua-2로 압축하여 컨텍스트 한도 내에서 세션 유지."""
-        if len(messages) <= 4:
-            return messages
-
-        # 최근 메시지 2개는 보존, 나머지를 압축
-        recent = messages[-2:]
-        older = messages[:-2]
-
-        # system 메시지는 별도 보존
-        system_msgs = [m for m in older if m.role == "system"]
-        chat_msgs = [m for m in older if m.role != "system"]
-
-        if not chat_msgs:
-            return messages
-
-        older_text = "\n".join(
-            f"[{m.role}]: {m.content}"
-            for m in chat_msgs
-            if isinstance(m.content, str)
-        )
-
-        compressed = self.compressor.compress(
-            older_text,
-            instruction="Preserve key facts, decisions, and context from this conversation",
-            target_token=1500,
-        )
-
-        self._logger.info(
-            f"🗜️ Compressed {len(chat_msgs)} messages → ~{len(compressed)//4} tokens"
-        )
-
-        result: list[ChatMessage] = list(system_msgs)
-        result.append(
-            ChatMessage(
-                role="system",
-                content=f"[Compressed conversation history]\n{compressed}",
+        if settings.debug:
+            self._logger.debug(
+                f"FULL RESPONSE BODY: {response.model_dump_json(indent=2)}"
             )
-        )
-        result.extend(recent)
-        return result
 
-    def _merge_messages(
-        self, history: list[ChatMessage], current: list[ChatMessage]
-    ) -> list[ChatMessage]:
-        merged = []
-        seen = set()
-        for msg in history + current:
-            key = (msg.role, str(msg.content).strip())
-            if key not in seen:
-                merged.append(msg)
-                seen.add(key)
-        return merged
+        return response
 
     async def _process_with_agent(
         self, request: ChatRequest, decision: RoutingDecision
@@ -252,12 +274,62 @@ class Gateway(IRouter):
             msg = "No agent selected"
             raise ResourceExhaustedError(msg)
 
+        discovered_models = self.analyzer.get_all_discovered_models_info()
+        agent_models = [
+            m["id"]
+            for m in discovered_models
+            if m.get("owned_by") == "local-agent"
+            and (
+                m["id"].lower().startswith(agent_type.value.lower())
+                or m.get("display_name", "")
+                .lower()
+                .startswith(agent_type.value.lower())
+            )
+        ]
+
+        if not agent_models:
+            self._logger.info(f"Refreshing models for agent {agent_type.value}...")
+            adapter = self._get_agent_adapter(agent_type)
+            new_models = await adapter.discover_models()
+            for m_info in new_models:
+                self.analyzer.register_model(m_info["id"], agent_type, m_info)
+            agent_models = [m["id"] for m in new_models]
+
         original_model = request.model
+
+        if (
+            decision.model_name == agent_type.value
+            or decision.model_name not in agent_models
+        ):
+            if agent_models:
+                best_fallback = next(
+                    (m for m in agent_models if "llama" in m.lower()), agent_models[0]
+                )
+                self._logger.info(
+                    f"Mapping generic/missing model {decision.model_name} to discovered agent model: {best_fallback}"
+                )
+                decision.model_name = best_fallback
+            else:
+                self._logger.warning(
+                    f"No models discovered for agent {agent_type.value}, using default."
+                )
+
         request.model = decision.model_name
 
         try:
             adapter = self._get_agent_adapter(agent_type)
             response = await adapter.generate(request, api_key="local-agent")
+
+            if not response.usage:
+                response.usage = {}
+            response.usage.update(
+                {
+                    "gateway_provider": agent_type.value,
+                    "gateway_key_index": 0,
+                    "gateway_model": decision.model_name,
+                }
+            )
+
             if original_model:
                 response.model = original_model
             return response
@@ -305,15 +377,16 @@ class Gateway(IRouter):
                 model_info: dict[str, Any] = next(
                     (m for m in model_list if m["id"] == decision.model_name), {}
                 )
-                min_tier = model_info.get("tier", "free")
+                tier_str = model_info.get("tier", "free")
+                min_tier = TierType(tier_str) if isinstance(tier_str, str) else tier_str
 
                 try:
                     api_key = await self.key_manager.get_next_key(
                         provider_type, min_tier=min_tier
                     )
-                except ResourceExhaustedError:
+                except (ResourceExhaustedError, RateLimitError):
                     self._logger.warning(
-                        f"Provider {provider_type.value} exhausted. Falling back..."
+                        f"Provider {provider_type.value} exhausted/rate-limited. Falling back..."
                     )
                     found_fallback = False
                     for p in [p for p in ProviderType if p != provider_type]:
@@ -325,7 +398,7 @@ class Gateway(IRouter):
                             if p == ProviderType.GEMINI:
                                 decision.model_name = (
                                     settings.default_free_model
-                                    if min_tier == "free"
+                                    if min_tier == TierType.FREE
                                     else settings.default_premium_model
                                 )
                             elif p == ProviderType.GROQ:
@@ -335,7 +408,12 @@ class Gateway(IRouter):
                         except ResourceExhaustedError:
                             continue
                     if not found_fallback:
-                        raise
+                        self._logger.warning(
+                            "All providers exhausted. Falling back to local agents..."
+                        )
+                        decision.agent = AgentType.OLLAMA
+                        decision.model_name = "ollama"
+                        return await self._process_with_agent(request, decision)
 
                 if not api_key:
                     msg = "API key allocation failed"
@@ -349,9 +427,13 @@ class Gateway(IRouter):
 
                 if not response.usage:
                     response.usage = {}
+
+                key_index = self.key_manager.get_key_index(provider_type, api_key)
+
                 response.usage.update(
                     {
-                        "gateway_key_id": api_key[:8] + "...",
+                        "gateway_provider": provider_type.value,
+                        "gateway_key_index": key_index,
                         "gateway_model": decision.model_name,
                     }
                 )
@@ -366,7 +448,7 @@ class Gateway(IRouter):
                     err_s = str(e).lower()
                     if "limit: 0" in err_s and "free_tier" in err_s:
                         self.key_manager.update_key_metadata(
-                            provider_type, api_key, {"tier": "free"}
+                            provider_type, api_key, {"tier": TierType.FREE}
                         )
                     await self.key_manager.report_failure(provider_type, api_key, e)
 
@@ -398,6 +480,51 @@ class Gateway(IRouter):
                     default_model="llama3.1-8b",
                 )
         return self._adapters[adapter_key]
+
+    async def _compress_session_history(
+        self, messages: list[ChatMessage]
+    ) -> list[ChatMessage]:
+        if len(messages) <= 2:
+            return messages
+
+        system_msg = next((m for m in messages if m.role == "system"), None)
+        last_msg = messages[-1]
+
+        other_msgs = [
+            m
+            for m in messages
+            if m != system_msg and m != last_msg and m.role != "system"
+        ]
+
+        if not other_msgs:
+            return messages
+
+        to_compress = ""
+        for m in other_msgs:
+            content = m.content
+            if isinstance(content, list):
+                content = " ".join([str(p) for p in content])
+            to_compress += f"{m.role}: {content}\n"
+
+        self._logger.info(f"Compressing {len(to_compress)} chars of history")
+        summary = self.compressor.compress(
+            to_compress, instruction="Summarize the conversation so far."
+        )
+
+        new_messages = []
+        if system_msg:
+            new_messages.append(system_msg)
+
+        new_messages.append(
+            ChatMessage(
+                role="system",
+                content=f"[CONVERSATION SUMMARY]\n{summary}",
+                name="history_compressor",
+            )
+        )
+        new_messages.append(last_msg)
+
+        return new_messages
 
     async def route_request(self, request: ChatRequest) -> ChatResponse:
         return await self.process_request(request)
@@ -440,6 +567,22 @@ class Gateway(IRouter):
                 models = await adapter.discover_models()
                 for m_info in models:
                     self.analyzer.register_model(m_info["id"], provider_type, m_info)
+
+                if provider_type == ProviderType.GEMINI and models:
+                    flash_models = [
+                        m["id"]
+                        for m in models
+                        if "flash" in m["id"].lower() and "lite" not in m["id"].lower()
+                    ]
+                    if flash_models:
+                        latest_flash = sorted(flash_models, reverse=True)[0]
+                        if latest_flash > settings.default_free_model:
+                            self._logger.info(
+                                f"✨ Found newer Gemini Flash model via discovery: {latest_flash} (Current: {settings.default_free_model})"
+                            )
+                            settings.default_free_model = latest_flash
+                            settings.default_premium_model = latest_flash
+
             except Exception as e:
                 self._logger.warning(
                     f"Discovery failed for provider {provider_type.value}: {e}"

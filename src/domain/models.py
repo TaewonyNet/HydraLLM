@@ -24,8 +24,8 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     model: str | None = Field(None, description="Model name to use for this request")
-    messages: list[ChatMessage] | None = Field(
-        None, description="List of messages in the conversation"
+    messages: list[ChatMessage] = Field(
+        ..., description="List of messages in the conversation"
     )
     prompt: str | None = Field(None, description="Legacy prompt string")
     temperature: float | None = Field(0.7, description="Sampling temperature")
@@ -45,11 +45,17 @@ class ChatRequest(BaseModel):
         None, description="Optional URL to fetch and include in context"
     )
     auto_web_fetch: bool | None = Field(
-        None, description="Auto-detect URLs in prompt and fetch content (None=server default)"
+        None,
+        description="Auto-detect URLs in prompt and fetch content (None=server default)",
     )
     compress_context: bool | None = Field(
-        None, description="Compress session history with LLMLingua-2 (None=server default)"
+        None,
+        description="Compress session history with LLMLingua-2 (None=server default)",
     )
+    tools: list[dict[str, Any]] | None = Field(
+        None, description="List of tools available"
+    )
+    tool_choice: str | dict[str, Any] | None = Field(None, description="Tool choice")
 
     model_config = {
         "extra": "allow",
@@ -166,4 +172,7 @@ class RoutingDecision(BaseModel):
     reason: str = Field(..., description="Reason for this routing decision")
     confidence: float | None = Field(
         None, description="Confidence score for this decision"
+    )
+    web_search_required: bool = Field(
+        False, description="Whether web search/fetch is needed"
     )

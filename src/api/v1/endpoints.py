@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from src.api.v1.dependencies import get_gateway, get_key_manager
 from src.core.exceptions import ResourceExhaustedError
-from src.domain.models import ChatRequest, ChatResponse
+from src.domain.models import ChatRequest
 from src.domain.schemas import ModelCapabilities, ModelInfo, ModelListResponse
 from src.services.gateway import Gateway
 from src.services.key_manager import KeyManager
@@ -87,7 +87,7 @@ def _convert_responses_input(input_val: Any) -> list[dict[str, Any]]:
 def _build_debug_request(request: ChatRequest) -> dict[str, Any]:
     """UI용 디버그: 실제 gateway에 전달되는 request 스냅샷."""
     msgs = []
-    for m in (request.messages or []):
+    for m in request.messages or []:
         c = m.content
         if isinstance(c, str) and len(c) > 500:
             c = c[:500] + f"... ({len(m.content)} chars)"
@@ -106,9 +106,7 @@ def _build_debug_request(request: ChatRequest) -> dict[str, Any]:
     }
 
 
-async def _handle_chat_completion(
-    request: ChatRequest, gateway: Gateway
-) -> ChatResponse | StreamingResponse:
+async def _handle_chat_completion(request: ChatRequest, gateway: Gateway) -> Any:
     try:
         logger.info(
             f"Processing chat request: model={request.model}, stream={request.stream}"
@@ -186,10 +184,11 @@ async def _handle_chat_completion(
 
         # non-streaming: 디버그 정보 포함하여 반환
         resp_dict = response.model_dump()
-        resp_dict["_gateway_debug"] = {
-            "request_before": debug_request_before,
-            "request_after": debug_request_after,
-        }
+        if isinstance(resp_dict, dict):
+            resp_dict["_gateway_debug"] = {
+                "request_before": debug_request_before,
+                "request_after": debug_request_after,
+            }
         return resp_dict
 
     except Exception as e:
@@ -208,7 +207,7 @@ async def _handle_chat_completion(
 @router.post("/chat/completions", response_model=None)
 async def chat_completion(
     request: ChatRequest, gateway: Gateway = Depends(get_gateway)
-) -> ChatResponse | StreamingResponse:
+) -> Any:
     return await _handle_chat_completion(request, gateway)
 
 
@@ -261,20 +260,20 @@ async def responses_alias(
 
             async def generate() -> Any:
                 resp_id = f"resp_{uuid.uuid4().hex[:24]}"
+                msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+
                 yield f"event: response.created\ndata: {json.dumps({'id': resp_id, 'object': 'response', 'status': 'in_progress', 'model': model_name, 'output': []})}\n\n"
+                yield f"event: response.output_item.added\ndata: {json.dumps({'output_index': 0, 'item': {'type': 'message', 'id': msg_id, 'role': 'assistant', 'status': 'in_progress', 'content': []}})}\n\n"
+                yield f"event: response.content_part.added\ndata: {json.dumps({'output_index': 0, 'content_index': 0, 'part': {'type': 'output_text', 'text': ''}})}\n\n"
 
                 try:
                     chat_request = ChatRequest(**request)
                     response = await gateway.process_request(chat_request)
-                    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
                     full_content = (
                         str(response.choices[0].message.content)
                         if response.choices
                         else ""
                     )
-
-                    yield f"event: response.output_item.added\ndata: {json.dumps({'output_index': 0, 'item': {'type': 'message', 'id': msg_id, 'role': 'assistant', 'status': 'in_progress', 'content': []}})}\n\n"
-                    yield f"event: response.content_part.added\ndata: {json.dumps({'output_index': 0, 'content_index': 0, 'part': {'type': 'output_text', 'text': ''}})}\n\n"
 
                     for j in range(0, len(full_content), 50):
                         delta = full_content[j : j + 50]
@@ -302,6 +301,8 @@ async def responses_alias(
                             "input_tokens": raw_usage.get("prompt_tokens", 0),
                             "output_tokens": raw_usage.get("completion_tokens", 0),
                             "total_tokens": raw_usage.get("total_tokens", 0),
+                            "gateway_provider": raw_usage.get("gateway_provider"),
+                            "gateway_key_index": raw_usage.get("gateway_key_index"),
                         },
                         "output": [done_item],
                     }
@@ -370,6 +371,9 @@ async def legacy_completion(
                         }
                     ],
                 }
+                if response.usage:
+                    final_chunk["usage"] = response.usage
+
                 yield f"data: {json.dumps(final_chunk)}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
@@ -437,8 +441,8 @@ async def complete_onboarding(
     enabled_models = selection.get("enabled_models", [])
     settings.onboarding_completed = True
     settings.enabled_models = enabled_models
-    gateway.session_manager.set_setting("onboarding_completed", True)
-    gateway.session_manager.set_setting("enabled_models", enabled_models)
+    await gateway.session_manager.set_setting("onboarding_completed", True)
+    await gateway.session_manager.set_setting("enabled_models", enabled_models)
     return {"status": "success", "message": "Onboarding completed"}
 
 
@@ -446,14 +450,34 @@ async def complete_onboarding(
 async def list_sessions(
     gateway: Gateway = Depends(get_gateway)
 ) -> list[dict[str, Any]]:
-    return gateway.session_manager.get_all_sessions()
+    return await gateway.session_manager.get_all_sessions()
+
+
+@router.post("/admin/sessions/new", response_model=dict[str, Any])
+async def create_new_session(
+    gateway: Gateway = Depends(get_gateway),
+) -> dict[str, Any]:
+    """새 서버 세션을 생성하고 session_id를 반환한다."""
+    session_id = await gateway.session_manager.create_session()
+    return {"session_id": session_id}
+
+
+@router.get("/admin/sessions/{session_id}", response_model=dict[str, Any])
+async def get_session_detail(
+    session_id: str, gateway: Gateway = Depends(get_gateway)
+) -> dict[str, Any]:
+    """세션 상세 정보 (메시지 수, 토큰 추정치 등)."""
+    info = await gateway.session_manager.get_session_info(session_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return info
 
 
 @router.delete("/admin/sessions/{session_id}")
 async def delete_session(
     session_id: str, gateway: Gateway = Depends(get_gateway)
 ) -> dict[str, Any]:
-    gateway.session_manager.clear_session(session_id)
+    await gateway.session_manager.clear_session(session_id)
     return {"status": "success", "message": f"Session {session_id} deleted"}
 
 
@@ -478,5 +502,21 @@ async def add_runtime_keys(
 @router.post("/admin/probe", response_model=dict[str, Any])
 async def force_probe_keys(gateway: Gateway = Depends(get_gateway)) -> dict[str, Any]:
     await gateway.probe_all_keys()
+    return {"status": "success", "message": "Key probing triggered"}
+
+
+@router.post("/admin/refresh-models", response_model=dict[str, Any])
+async def refresh_models(gateway: Gateway = Depends(get_gateway)) -> dict[str, Any]:
+    await gateway.discover_all_models()
+    from src.core.config import settings
+
+    return {
+        "status": "success",
+        "message": "Model discovery triggered",
+        "current_defaults": {
+            "free": settings.default_free_model,
+            "premium": settings.default_premium_model,
+        },
+    }
     await gateway.recover_failed_keys()
     return {"status": "success", "message": "Forced probing and recovery initiated"}
