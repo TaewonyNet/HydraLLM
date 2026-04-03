@@ -7,10 +7,17 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from src.api.v1.dependencies import get_gateway, get_key_manager
+from src.api.v1.dependencies import (
+    get_admin_service,
+    get_gateway,
+    get_key_manager,
+    require_admin,
+)
 from src.core.exceptions import ResourceExhaustedError
+from src.core.logging import request_id_ctx
 from src.domain.models import ChatRequest
 from src.domain.schemas import ModelCapabilities, ModelInfo, ModelListResponse
+from src.services.admin_service import AdminService
 from src.services.gateway import Gateway
 from src.services.key_manager import KeyManager
 
@@ -107,6 +114,9 @@ def _build_debug_request(request: ChatRequest) -> dict[str, Any]:
 
 
 async def _handle_chat_completion(request: ChatRequest, gateway: Gateway) -> Any:
+    request_id = f"req_{uuid.uuid4().hex[:12]}"
+    request_id_ctx.set(request_id)
+
     try:
         logger.info(
             f"Processing chat request: model={request.model}, stream={request.stream}"
@@ -115,7 +125,7 @@ async def _handle_chat_completion(request: ChatRequest, gateway: Gateway) -> Any
         # 디버그용: gateway 처리 전 원본 request 스냅샷
         debug_request_before = _build_debug_request(request)
 
-        response = await gateway.process_request(request)
+        response = await gateway.process_request(request, endpoint="chat")
 
         # 디버그용: gateway 처리 후 실제 전달된 request (web_fetch 결과 포함)
         debug_request_after = _build_debug_request(request)
@@ -182,14 +192,46 @@ async def _handle_chat_completion(request: ChatRequest, gateway: Gateway) -> Any
 
             return StreamingResponse(generate(), media_type="text/event-stream")
 
-        # non-streaming: 디버그 정보 포함하여 반환
-        resp_dict = response.model_dump()
-        if isinstance(resp_dict, dict):
+        try:
+            resp_dict = json.loads(response.model_dump_json())
             resp_dict["_gateway_debug"] = {
                 "request_before": debug_request_before,
                 "request_after": debug_request_after,
             }
-        return resp_dict
+            return resp_dict
+        except Exception as e:
+            logger.error(f"Error serializing response: {e}")
+            return {
+                "id": response.id,
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": response.choices[0].message.content,
+                        }
+                    }
+                ],
+                "usage": response.usage,
+                "error": f"Serialization error: {str(e)}",
+            }
+
+            return resp_dict
+        except Exception as e:
+            logger.error(f"Error serializing response: {e}")
+            # 최소한의 데이터만이라도 반환 시도
+            return {
+                "id": response.id,
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": response.choices[0].message.content,
+                        }
+                    }
+                ],
+                "usage": response.usage,
+                "error": f"Serialization error: {str(e)}",
+            }
 
     except Exception as e:
         logger.error(f"Error in LLM processing: {e}")
@@ -215,6 +257,9 @@ async def chat_completion(
 async def responses_alias(
     request_data: Any = Body(...), gateway: Gateway = Depends(get_gateway)
 ) -> Any:
+    request_id = f"req_{uuid.uuid4().hex[:12]}"
+    request_id_ctx.set(request_id)
+
     if not isinstance(request_data, dict):
         request = {"input": request_data}
     else:
@@ -268,7 +313,9 @@ async def responses_alias(
 
                 try:
                     chat_request = ChatRequest(**request)
-                    response = await gateway.process_request(chat_request)
+                    response = await gateway.process_request(
+                        chat_request, endpoint="responses"
+                    )
                     full_content = (
                         str(response.choices[0].message.content)
                         if response.choices
@@ -324,6 +371,9 @@ async def responses_alias(
 async def legacy_completion(
     request: dict[str, Any] = Body(...), gateway: Gateway = Depends(get_gateway)
 ) -> Any:
+    request_id = f"req_{uuid.uuid4().hex[:12]}"
+    request_id_ctx.set(request_id)
+
     if "prompt" in request and "messages" not in request:
         prompt = request.pop("prompt")
         if isinstance(prompt, list):
@@ -335,7 +385,9 @@ async def legacy_completion(
         async def generate() -> Any:
             try:
                 chat_request = ChatRequest(**request)
-                response = await gateway.process_request(chat_request)
+                response = await gateway.process_request(
+                    chat_request, endpoint="legacy"
+                )
                 full_content = (
                     str(response.choices[0].message.content) if response.choices else ""
                 )
@@ -410,7 +462,10 @@ async def list_models(gateway: Gateway = Depends(get_gateway)) -> ModelListRespo
 
 
 @router.get("/admin/status", response_model=dict[str, Any])
-async def get_system_status(gateway: Gateway = Depends(get_gateway)) -> dict[str, Any]:
+async def get_system_status(
+    _: None = Depends(require_admin),
+    gateway: Gateway = Depends(get_gateway),
+) -> dict[str, Any]:
     status_data = await gateway.get_status()
     key_stats = gateway.key_manager.get_key_status()
     serializable_key_stats = {
@@ -422,19 +477,26 @@ async def get_system_status(gateway: Gateway = Depends(get_gateway)) -> dict[str
 
 @router.get("/admin/onboarding", response_model=dict[str, Any])
 async def get_onboarding_status(
+    _: None = Depends(require_admin),
     gateway: Gateway = Depends(get_gateway),
 ) -> dict[str, Any]:
     from src.core.config import settings
 
+    models = gateway.get_all_models()
+    if not models:
+        models = gateway.analyzer._get_virtual_models()
+
     return {
         "completed": settings.onboarding_completed,
-        "available_models": gateway.get_all_models(),
+        "available_models": models,
     }
 
 
 @router.post("/admin/onboarding", response_model=dict[str, Any])
 async def complete_onboarding(
-    selection: dict[str, Any], gateway: Gateway = Depends(get_gateway)
+    selection: dict[str, Any],
+    _: None = Depends(require_admin),
+    gateway: Gateway = Depends(get_gateway),
 ) -> dict[str, Any]:
     from src.core.config import settings
 
@@ -448,23 +510,26 @@ async def complete_onboarding(
 
 @router.get("/admin/sessions", response_model=list[dict[str, Any]])
 async def list_sessions(
-    gateway: Gateway = Depends(get_gateway)
+    _: None = Depends(require_admin),
+    gateway: Gateway = Depends(get_gateway),
 ) -> list[dict[str, Any]]:
     return await gateway.session_manager.get_all_sessions()
 
 
 @router.post("/admin/sessions/new", response_model=dict[str, Any])
 async def create_new_session(
+    _: None = Depends(require_admin),
     gateway: Gateway = Depends(get_gateway),
 ) -> dict[str, Any]:
-    """새 서버 세션을 생성하고 session_id를 반환한다."""
     session_id = await gateway.session_manager.create_session()
     return {"session_id": session_id}
 
 
 @router.get("/admin/sessions/{session_id}", response_model=dict[str, Any])
 async def get_session_detail(
-    session_id: str, gateway: Gateway = Depends(get_gateway)
+    session_id: str,
+    _: None = Depends(require_admin),
+    gateway: Gateway = Depends(get_gateway),
 ) -> dict[str, Any]:
     """세션 상세 정보 (메시지 수, 토큰 추정치 등)."""
     info = await gateway.session_manager.get_session_info(session_id)
@@ -475,15 +540,32 @@ async def get_session_detail(
 
 @router.delete("/admin/sessions/{session_id}")
 async def delete_session(
-    session_id: str, gateway: Gateway = Depends(get_gateway)
+    session_id: str,
+    _: None = Depends(require_admin),
+    gateway: Gateway = Depends(get_gateway),
 ) -> dict[str, Any]:
     await gateway.session_manager.clear_session(session_id)
     return {"status": "success", "message": f"Session {session_id} deleted"}
 
 
+@router.post("/admin/sessions/{session_id}/fork", response_model=dict[str, Any])
+async def fork_session(
+    session_id: str,
+    body: dict[str, Any] = Body(default={}),
+    _: None = Depends(require_admin),
+    gateway: Gateway = Depends(get_gateway),
+) -> dict[str, Any]:
+    """세션 분기: 특정 메시지 지점까지 복사하여 독립 세션 생성."""
+    message_id = body.get("message_id")
+    new_session_id = await gateway.session_manager.fork_session(session_id, message_id)
+    return {"session_id": new_session_id, "forked_from": session_id}
+
+
 @router.post("/admin/keys", response_model=dict[str, Any])
 async def add_runtime_keys(
-    payload: dict[str, Any], key_manager: KeyManager = Depends(get_key_manager)
+    payload: dict[str, Any],
+    _: None = Depends(require_admin),
+    key_manager: KeyManager = Depends(get_key_manager),
 ) -> dict[str, Any]:
     """런타임에 API 키를 추가/갱신한다. {"provider": "gemini", "keys": ["key1", "key2"]}"""
     provider = payload.get("provider")
@@ -500,7 +582,10 @@ async def add_runtime_keys(
 
 
 @router.post("/admin/probe", response_model=dict[str, Any])
-async def force_probe_keys(gateway: Gateway = Depends(get_gateway)) -> dict[str, Any]:
+async def force_probe_keys(
+    _: None = Depends(require_admin),
+    gateway: Gateway = Depends(get_gateway),
+) -> dict[str, Any]:
     await gateway.probe_all_keys()
     return {"status": "success", "message": "Key probing triggered"}
 
@@ -518,5 +603,21 @@ async def refresh_models(gateway: Gateway = Depends(get_gateway)) -> dict[str, A
             "premium": settings.default_premium_model,
         },
     }
-    await gateway.recover_failed_keys()
-    return {"status": "success", "message": "Forced probing and recovery initiated"}
+
+
+@router.get("/admin/dashboard", response_model=dict[str, Any])
+async def get_admin_dashboard(
+    _: None = Depends(require_admin),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> dict[str, Any]:
+    data = await admin_service.get_dashboard_data()
+    return data
+
+
+@router.get("/admin/logs", response_model=list[dict[str, Any]])
+async def get_system_logs(
+    limit: int = 50,
+    _: None = Depends(require_admin),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> list[dict[str, Any]]:
+    return await admin_service.session_manager.get_recent_logs(limit=limit)

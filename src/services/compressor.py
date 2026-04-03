@@ -18,8 +18,8 @@ class ContextCompressor:
             logger.warning(
                 "llmlingua not found. Falling back to simple extractive compression."
             )
-        except Exception as e:
-            logger.error(f"Failed to initialize LLMLingua-2: {e}")
+        except Exception:
+            self.model = None
 
     def compress(
         self, context: str, instruction: str = "", target_token: int = 2000

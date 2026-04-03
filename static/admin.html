@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HydraLLM Admin Panel</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <style>
+        :root { --primary: #007bff; --success: #28a745; --warning: #ffc107; --danger: #dc3545; --dark: #343a40; --light: #f8f9fa; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f4f7f6; color: #333; }
+        .nav { background: var(--dark); color: white; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; height: 60px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .nav-brand { font-size: 1.4rem; font-weight: bold; display: flex; align-items: center; gap: 10px; }
+        .nav-links { display: flex; gap: 20px; }
+        .nav-link { color: #ccc; text-decoration: none; cursor: pointer; padding: 10px; border-radius: 4px; transition: 0.2s; }
+        .nav-link:hover, .nav-link.active { color: white; background: rgba(255,255,255,0.1); }
+        
+        .container { max-width: 1400px; margin: 20px auto; padding: 0 20px; }
+        .view { display: none; }
+        .view.active { display: block; }
+        
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .card-title { font-size: 1.1rem; font-weight: bold; color: var(--primary); }
+        
+        .stat-box { text-align: center; padding: 20px; border-radius: 8px; background: var(--light); }
+        .stat-value { font-size: 2rem; font-weight: bold; margin: 10px 0; }
+        .stat-label { color: #666; font-size: 0.9rem; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #eee; }
+        th { background: #fafafa; color: #666; }
+        tr:hover { background: #fcfcfc; }
+        
+        .badge { padding: 4px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; }
+        .badge-info { background: #e3f2fd; color: #1565c0; }
+        .badge-error { background: #ffebee; color: #c62828; }
+        .badge-warning { background: #fff3e0; color: #ef6c00; }
+        
+        .log-meta { font-family: monospace; font-size: 0.75rem; color: #888; }
+        
+        /* Chat UI styles preserved and refined */
+        .chat-container { display: flex; gap: 20px; height: 80vh; }
+        .chat-main { flex: 1; display: flex; flex-direction: column; background: white; border-radius: 12px; padding: 20px; }
+        #chat-history { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 15px; }
+        .msg { padding: 10px 15px; border-radius: 15px; max-width: 80%; }
+        .msg-user { align-self: flex-end; background: var(--primary); color: white; }
+        .msg-assistant { align-self: flex-start; background: var(--light); border: 1px solid #eee; }
+        .input-area { display: flex; gap: 10px; }
+        
+        .loading-spinner { border: 3px solid #f3f3f3; border-top: 3px solid var(--primary); border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-brand">🐉 HydraLLM <span>Admin</span></div>
+        <div class="nav-links">
+            <a class="nav-link" href="/ui">Playground</a>
+            <a class="nav-link active" onclick="showView('dashboard')">대시보드</a>
+            <a class="nav-link" onclick="showView('logs')">시스템 로그</a>
+            <a class="nav-link" onclick="showView('settings')">설정</a>
+        </div>
+        <div id="global-status" class="badge badge-info">Checking...</div>
+    </nav>
+
+    <div class="container">
+        <div id="view-dashboard" class="view active">
+            <div class="grid">
+                <div class="card">
+                    <div class="stat-box">
+                        <div class="stat-label">누적 토큰 사용량</div>
+                        <div id="stat-tokens" class="stat-value">0</div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="stat-box">
+                        <div class="stat-label">총 요청 횟수</div>
+                        <div id="stat-requests" class="stat-value">0</div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="stat-box">
+                        <div class="stat-label">활성 API 키</div>
+                        <div id="stat-keys" class="stat-value">0 / 0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid">
+                <div class="card" style="grid-column: span 2;">
+                    <div class="card-header"><div class="card-title">제공자별 사용량</div></div>
+                    <canvas id="usageChart" height="100"></canvas>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title">최근 리소스 오류</div></div>
+                    <div id="recent-errors">
+                        <p style="color:#999; text-align:center;">오류 내역이 없습니다.</p>
+                    </div>
+            </div>
+        </div>
+
+        <div id="view-logs" class="view">
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">시스템 이벤트 로그</div>
+                    <button onclick="loadLogs()" class="badge badge-info" style="border:none; cursor:pointer;">새로고침</button>
+                </div>
+                <table id="logs-table">
+                    <thead>
+                        <tr>
+                            <th>시간</th>
+                            <th>레벨</th>
+                            <th>카테고리</th>
+                            <th>메시지</th>
+                            <th>메타데이터</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="view-settings" class="view">
+            <div class="card">
+                <div class="card-title">API Key 관리</div>
+                <p>런타임에 새로운 키를 추가할 수 있습니다.</p>
+                <div style="display:flex; gap:10px; margin-top:15px;">
+                    <select id="key-provider" style="width:150px;">
+                        <option value="gemini">Gemini</option>
+                        <option value="groq">Groq</option>
+                        <option value="cerebras">Cerebras</option>
+                    </select>
+                    <input type="text" id="new-key-input" placeholder="API Key 입력 (콤마로 다수 입력 가능)" style="flex:1; padding:10px;">
+                    <button onclick="addKeys()" style="background:var(--success);">키 추가</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSessionId = localStorage.getItem('hydra_admin_session');
+        let usageChart = null;
+
+        function showView(viewName) {
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+            
+            document.getElementById(`view-${viewName}`).classList.add('active');
+            
+            // Find and activate the link
+            const links = document.querySelectorAll('.nav-link');
+            for (const link of links) {
+                if (link.getAttribute('onclick').includes(`'${viewName}'`)) {
+                    link.classList.add('active');
+                }
+            }
+            
+            if (viewName === 'dashboard') loadDashboard();
+            if (viewName === 'logs') loadLogs();
+            if (viewName === 'chat') { loadModels(); loadSessions(); }
+        }
+
+        async function loadDashboard() {
+            try {
+                const res = await fetch('/v1/admin/dashboard');
+                const data = await res.json();
+                
+                document.getElementById('stat-tokens').textContent = (data.total_tokens || 0).toLocaleString();
+                document.getElementById('stat-requests').textContent = (data.total_requests || 0).toLocaleString();
+                
+                const activeKeys = data.health ? data.health.reduce((acc, h) => acc + (parseInt(h.active_keys) || 0), 0) : 0;
+                const totalKeys = data.health ? data.health.reduce((acc, h) => acc + (parseInt(h.active_keys) || 0) + (parseInt(h.failed_keys) || 0), 0) : 0;
+                document.getElementById('stat-keys').textContent = `${activeKeys} / ${totalKeys}`;
+                
+                const badge = document.getElementById('global-status');
+                if (activeKeys > 0) {
+                    badge.textContent = 'System Healthy';
+                    badge.className = 'badge badge-success';
+                } else {
+                    badge.textContent = 'All Providers Offline';
+                    badge.className = 'badge badge-error';
+                }
+
+                updateUsageChart(data.providers || []);
+                updateHealthDisplay(data.health || []);
+                
+                const errorContainer = document.getElementById('recent-errors');
+                const errors = data.recent_logs ? data.recent_logs.filter(l => l.level === 'ERROR') : [];
+                if (errors.length > 0) {
+                    errorContainer.innerHTML = errors.map(e => `
+                        <div style="padding:10px; border-left:4px solid var(--danger); background:#fff5f5; margin-bottom:5px; font-size:0.85rem;">
+                            <strong>${e.category}</strong>: ${e.message}
+                            <div style="color:#888; font-size:0.7rem;">${new Date(e.created_at).toLocaleString()}</div>
+                        </div>
+                    `).join('');
+                } else {
+                    errorContainer.innerHTML = '<p style="color:#999; text-align:center;">오류 내역이 없습니다.</p>';
+                }
+            } catch (e) { console.error("Dashboard load failed", e); }
+        }
+
+        function updateHealthDisplay(healthData) {
+            const container = document.getElementById('view-dashboard');
+            // Check if health-grid already exists, if not, or to refresh
+            let grid = document.getElementById('health-grid');
+            if (!grid) {
+                grid = document.createElement('div');
+                grid.id = 'health-grid';
+                grid.className = 'grid';
+                grid.style.marginTop = '20px';
+                container.appendChild(grid);
+            }
+            
+            grid.innerHTML = healthData.map(h => `
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <strong>${h.provider.toUpperCase()}</strong>
+                        <span class="badge badge-${h.status === 'healthy' ? 'success' : 'danger'}">${h.status}</span>
+                    </div>
+                    <div style="font-size:0.8rem; margin-top:10px; color:#666;">
+                        Keys: ${h.active_keys} active / ${h.failed_keys} failed
+                    </div>
+                    ${h.last_error ? `<div style="font-size:0.7rem; color:var(--danger); margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${h.last_error}">${h.last_error}</div>` : ''}
+                </div>
+            `).join('');
+        }
+
+        function updateUsageChart(usageData) {
+            const ctx = document.getElementById('usageChart').getContext('2d');
+            // 모델별로 그룹화하여 표시
+            const labels = usageData.map(u => `${u.provider}/${u.model}`);
+            const totals = usageData.map(u => u.total);
+            const promptTokens = usageData.map(u => u.prompt);
+            const completionTokens = usageData.map(u => u.completion);
+            
+            if (usageChart) usageChart.destroy();
+            usageChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Prompt Tokens',
+                            data: promptTokens,
+                            backgroundColor: '#007bffaa'
+                        },
+                        {
+                            label: 'Completion Tokens',
+                            data: completionTokens,
+                            backgroundColor: '#28a745aa'
+                        }
+                    ]
+                },
+                options: { 
+                    scales: { y: { stacked: true, beginAtZero: true } },
+                    x: { stacked: true }
+                }
+            });
+            
+            // 상세 테이블 업데이트
+            updateDetailedTable(usageData);
+        }
+
+        function updateDetailedTable(usageData) {
+            let container = document.getElementById('detailed-usage-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'detailed-usage-container';
+                container.className = 'card';
+                container.style.marginTop = '20px';
+                document.getElementById('view-dashboard').appendChild(container);
+            }
+            
+            container.innerHTML = `
+                <div class="card-header"><div class="card-title">모델별 상세 사용량 리포트</div></div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Provider</th>
+                            <th>Model</th>
+                            <th>Prompt</th>
+                            <th>Completion</th>
+                            <th>Total</th>
+                            <th>Requests</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${usageData.map(u => `
+                            <tr>
+                                <td>${u.provider.toUpperCase()}</td>
+                                <td><code>${u.model}</code></td>
+                                <td>${u.prompt.toLocaleString()}</td>
+                                <td>${u.completion.toLocaleString()}</td>
+                                <td><strong>${u.total.toLocaleString()}</strong></td>
+                                <td>${u.count}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        async function loadLogs() {
+            const tbody = document.querySelector('#logs-table tbody');
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">불러오는 중...</td></tr>';
+            try {
+                const res = await fetch('/v1/admin/logs?limit=50');
+                const logs = await res.json();
+                tbody.innerHTML = logs.map(l => `
+                    <tr>
+                        <td style="white-space:nowrap;">${new Date(l.created_at).toLocaleTimeString()}</td>
+                        <td><span class="badge badge-${l.level.toLowerCase() === 'error' ? 'danger' : (l.level.toLowerCase() === 'warning' ? 'warning' : 'info')}">${l.level}</span></td>
+                        <td><strong>${l.category}</strong></td>
+                        <td>${l.message}</td>
+                        <td class="log-meta">${l.metadata}</td>
+                    </tr>
+                `).join('');
+            } catch (e) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--danger);">실패</td></tr>'; }
+        }
+
+        // Chat logic
+        async function loadModels() {
+            const select = document.getElementById('model-select');
+            try {
+                const res = await fetch('/v1/models');
+                const data = await res.json();
+                select.innerHTML = '<option value="auto">Auto Routing</option>' + 
+                    data.data.map(m => `<option value="${m.id}">${m.display_name || m.id}</option>`).join('');
+            } catch (e) {}
+        }
+
+        async function sendChatMessage() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (!text) return;
+            
+            appendMsg('user', text);
+            input.value = '';
+            
+            try {
+                const res = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: document.getElementById('model-select').value,
+                        messages: [{ role: 'user', content: text }],
+                        session_id: currentSessionId
+                    })
+                });
+                const data = await res.json();
+                appendMsg('assistant', data.choices[0].message.content);
+            } catch (e) { appendMsg('assistant', "Error: " + e.message); }
+        }
+
+        function appendMsg(role, content) {
+            const hist = document.getElementById('chat-history');
+            const div = document.createElement('div');
+            div.className = `msg msg-${role}`;
+            div.textContent = content;
+            hist.appendChild(div);
+            hist.scrollTop = hist.scrollHeight;
+        }
+
+        async function refreshGlobalStatus() {
+            try {
+                const res = await fetch('/v1/admin/status');
+                const data = await res.json();
+                const badge = document.getElementById('global-status');
+                if (data.status && data.status.status === 'healthy') {
+                    badge.textContent = 'System Healthy';
+                    badge.className = 'badge badge-success';
+                } else {
+                    badge.textContent = 'Issues Detected';
+                    badge.className = 'badge badge-error';
+                }
+            } catch (e) {
+                document.getElementById('global-status').textContent = 'Offline';
+            }
+        }
+
+        // Lifecycle
+        window.onload = () => {
+            loadDashboard();
+            refreshGlobalStatus();
+            setInterval(loadDashboard, 30000);
+            setInterval(refreshGlobalStatus, 60000);
+        };
+    </script>
+</body>
+</html>

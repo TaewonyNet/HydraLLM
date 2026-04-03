@@ -1,5 +1,7 @@
 import asyncio
+import ipaddress
 import logging
+import socket
 import urllib.parse
 from typing import Literal, cast
 
@@ -10,6 +12,49 @@ from scrapling.fetchers import StealthyFetcher
 logger = logging.getLogger(__name__)
 
 ScrapeMode = Literal["standard", "simple", "network_only"]
+
+# SSRF 차단 대상: private/reserved IP 대역
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _validate_url(url: str) -> str:
+    """URL이 외부 호스트를 가리키는지 검증하고, 내부 네트워크 접근을 차단한다."""
+    parsed = urllib.parse.urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        msg = f"Blocked: unsupported scheme '{parsed.scheme}'"
+        raise ValueError(msg)
+
+    hostname = parsed.hostname
+    if not hostname:
+        msg = "Blocked: empty hostname"
+        raise ValueError(msg)
+
+    # DNS 조회 → IP 검증 (리다이렉트 기반 SSRF 우회 방지)
+    try:
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or 443)
+    except socket.gaierror:
+        msg = f"Blocked: cannot resolve hostname '{hostname}'"
+        raise ValueError(msg) from None
+
+    for _family, _type, _proto, _canonname, sockaddr in addr_infos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        for network in _BLOCKED_NETWORKS:
+            if ip in network:
+                msg = f"Blocked: hostname '{hostname}' resolves to internal address"
+                raise ValueError(msg)
+
+    return url
 
 
 class WebScraper:
@@ -40,6 +85,12 @@ class WebScraper:
     async def scrape_url(
         self, url: str, mode: ScrapeMode = "standard", timeout_ms: int = 30000
     ) -> str:
+        try:
+            _validate_url(url)
+        except ValueError as e:
+            logger.warning(f"SSRF blocked: {e}")
+            return f"Blocked URL: {url}"
+
         logger.info(f"Scraping URL ({mode}) with Scrapling: {url}")
 
         try:
@@ -129,7 +180,7 @@ class WebScraper:
         self, query: str, num_results: int = 3, mode: ScrapeMode = "standard"
     ) -> str:
         logger.info(f"Performing search for: {query}")
-        search_url = f"https://duckduckgo.com/html/?q={query.replace(' ', '+')}"
+        search_url = f"https://duckduckgo.com/html/?q={urllib.parse.quote_plus(query)}"
 
         try:
             fetcher = StealthyFetcher()
@@ -155,11 +206,23 @@ class WebScraper:
             if not top_links:
                 return "No search results found."
 
-            tasks = [self.scrape_url(url, mode) for url in top_links]
+            # 검색 결과 URL도 SSRF 검증
+            safe_links = []
+            for search_link in top_links:
+                try:
+                    _validate_url(search_link)
+                    safe_links.append(search_link)
+                except ValueError as e:
+                    logger.warning(f"SSRF blocked search result: {e}")
+
+            if not safe_links:
+                return "No safe search results found."
+
+            tasks = [self.scrape_url(url, mode) for url in safe_links]
             results = await asyncio.gather(*tasks)
 
             combined_results = []
-            for url, content in zip(top_links, results, strict=False):
+            for url, content in zip(safe_links, results, strict=False):
                 combined_results.append(f"--- SOURCE: {url} ---\n{content}\n")
 
             return "\n".join(combined_results)

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     enable_rate_limiting: bool = True
     enable_logging: bool = True
     enable_auto_web_fetch: bool = True
+    web_cache_ttl_hours: int = 24
+
+    # Admin API 인증 키 (설정하지 않으면 인증 비활성화)
+    admin_api_key: str | None = None
 
     provider_priority: list[str] | str = "gemini,groq,cerebras,ollama,opencode,openclaw"
 
@@ -55,6 +59,8 @@ class Settings(BaseSettings):
     enabled_models: list[str] | str | None = None
 
     enable_context_compression: bool = True
+
+    database_path: str = "gateway_sessions.sqlite"
 
     max_sessions: int = 50
     session_compact_threshold: int = 6000  # 토큰 추정치 초과 시 compaction 트리거

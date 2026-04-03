@@ -6,9 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from src.domain.models import ChatMessage, ChatRequest
 from src.services.gateway import Gateway
-from src.domain.models import ChatRequest, ChatMessage
-from src.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("RealtimeTest")

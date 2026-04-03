@@ -60,6 +60,7 @@ class OpenAICompatAdapter(ILLMProvider):
             "llama",
             "cerebras",
             "auto",
+            "mllm/auto",
             "ollama",
             "opencode",
             "openclaw",
@@ -145,6 +146,7 @@ class OpenAICompatAdapter(ILLMProvider):
                 "completion_tokens": openai_response.usage.completion_tokens,
                 "total_tokens": openai_response.usage.total_tokens,
             },
+            session_id=None,
         )
 
     async def discover_models(self) -> list[dict[str, Any]]:

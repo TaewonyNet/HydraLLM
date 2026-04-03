@@ -3,598 +3,458 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HydraLLM Tester</title>
+    <title>HydraLLM - Unified Control Center</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f5f7f9; }
-        .container { display: flex; gap: 20px; flex-wrap: wrap; }
-        .chat-section { flex: 1; min-width: 300px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; height: 85vh; }
-        .sidebar { flex: 0 0 300px; min-width: 300px; display: flex; flex-direction: column; gap: 20px; max-height: 85vh; overflow-y: auto; }
+        :root { --primary: #007bff; --success: #28a745; --warning: #ffc107; --danger: #dc3545; --dark: #343a40; --light: #f8f9fa; --sidebar-width: 380px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f4f7f6; color: #333; overflow-x: hidden; }
+        
+        .nav { background: var(--dark); color: white; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; height: 60px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; }
+        .nav-brand { font-size: 1.4rem; font-weight: bold; cursor: pointer; }
+        .nav-links { display: flex; gap: 10px; }
+        .nav-link { color: #ccc; text-decoration: none; cursor: pointer; padding: 10px 15px; border-radius: 4px; transition: 0.2s; font-size: 0.95rem; }
+        .nav-link:hover, .nav-link.active { color: white; background: rgba(255,255,255,0.1); }
+        
+        .container { max-width: 1400px; margin: 20px auto; padding: 0 20px; }
+        .view { display: none; animation: fadeIn 0.3s; }
+        .view.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-        @media (max-width: 768px) {
-            .container { flex-direction: column; }
-            .chat-section { height: 60vh; }
-            .sidebar { flex: none; width: 100%; max-height: none; }
-        }
+        #provider-sidebar { position: fixed; top: 0; right: calc(-1 * var(--sidebar-width)); width: var(--sidebar-width); height: 100vh; background: white; box-shadow: -5px 0 15px rgba(0,0,0,0.1); transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 200; padding: 25px; overflow-y: auto; box-sizing: border-box; }
+        #provider-sidebar.active { right: 0; }
+        .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); display: none; z-index: 190; }
+        .sidebar-overlay.active { display: block; }
 
-        .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        h2 { margin-top: 0; font-size: 1.1rem; color: #007bff; border-bottom: 2px solid #f0f4f8; padding-bottom: 10px; margin-bottom: 15px; }
-        #chat-history { flex-grow: 1; overflow-y: auto; border: 1px solid #eee; padding: 15px; margin-bottom: 15px; border-radius: 4px; display: flex; flex-direction: column; gap: 12px; background-color: #fafafa; }
-        .message { padding: 12px 16px; border-radius: 12px; max-width: 90%; word-wrap: break-word; position: relative; font-size: 0.95rem; }
-        .user-message { background-color: #007bff; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
-        .bot-message { background-color: #ffffff; color: #333; align-self: flex-start; border-bottom-left-radius: 2px; border: 1px solid #e0e0e0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-        .system-message { background-color: #fff3cd; color: #856404; align-self: center; font-size: 0.8rem; border-radius: 4px; text-align: center; max-width: 80%; }
-
-        .markdown-body pre { background-color: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; border: 1px solid #e1e4e8; margin: 10px 0; }
-        .markdown-body code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 85%; background-color: rgba(27,31,35,0.05); padding: 0.2em 0.4em; border-radius: 3px; }
-        .markdown-body pre code { background-color: transparent; padding: 0; border-radius: 0; font-size: 90%; }
-        .markdown-body h1, .markdown-body h2, .markdown-body h3 { margin-top: 16px; margin-bottom: 8px; font-weight: 600; line-height: 1.25; color: #007bff; }
-        .markdown-body p { margin-bottom: 10px; }
-        .markdown-body ul, .markdown-body ol { padding-left: 20px; margin-bottom: 10px; }
-        .markdown-body blockquote { padding: 0 1em; color: #6a737d; border-left: 0.25em solid #dfe2e5; margin: 10px 0; }
-
-        .input-group { display: flex; gap: 10px; }
-        input[type="text"], textarea, select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 0.9rem; }
-        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
-        button:hover { background-color: #0056b3; }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
-        .status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: bold; margin-bottom: 5px; }
-        .status-healthy { background-color: #d4edda; color: #155724; }
-        .status-unhealthy { background-color: #f8d7da; color: #721c24; }
-        .tier-badge { font-size: 0.7rem; padding: 1px 5px; border-radius: 4px; margin-left: 5px; text-transform: uppercase; }
-        .tier-free { background-color: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
-        .tier-premium { background-color: #fff3e0; color: #ef6c00; border: 1px solid #ffe0b2; }
-        .tier-experimental { background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #e1bee7; }
-        .tier-standard { background-color: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }
-        pre.raw-json { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 0.75rem; border: 1px solid #eee; white-space: pre-wrap; word-break: break-all; }
-        .raw-tab-active { background: #007bff !important; color: white !important; border-color: #007bff !important; font-weight: bold; }
-        .loading { font-style: italic; color: #666; }
-        .model-info { font-size: 0.8rem; color: #666; margin-top: 5px; padding: 8px; background: #f9f9f9; border-radius: 4px; }
-        .session-item { padding: 6px 8px; border: 1px solid #eee; border-radius: 4px; cursor: pointer; font-size: 0.78rem; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .stat-box { text-align: center; padding: 15px; border-radius: 8px; background: var(--light); }
+        .stat-value { font-size: 1.8rem; font-weight: bold; margin: 5px 0; color: var(--primary); }
+        
+        .chat-layout { display: flex; gap: 20px; height: 82vh; align-items: stretch; }
+        .chat-main { flex: 1; display: flex; flex-direction: column; background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        #chat-history { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 12px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 15px; background: #fafafa; }
+        .message { padding: 12px 16px; border-radius: 12px; max-width: 85%; font-size: 0.95rem; position: relative; }
+        .msg-user { align-self: flex-end; background: var(--primary); color: white; border-bottom-right-radius: 2px; }
+        .msg-assistant { align-self: flex-start; background: white; border: 1px solid #e0e0e0; border-bottom-left-radius: 2px; }
+        .msg-system { align-self: center; background: #fff3cd; color: #856404; font-size: 0.75rem; border-radius: 4px; padding: 4px 8px; }
+        .chat-input-area { display: flex; gap: 10px; }
+        .chat-sidebar { width: 320px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+        
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th, td { text-align: left; padding: 10px; border-bottom: 1px solid #eee; }
+        .badge { padding: 3px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: bold; }
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-danger { background: #f8d7da; color: #721c24; }
+        .badge-info { background: #e3f2fd; color: #1565c0; }
+        
+        .loading { font-style: italic; color: #888; }
+        .model-info { font-size: 0.75rem; color: #666; background: #f9f9f9; padding: 8px; border-radius: 4px; margin-top: 5px; }
+        .session-item { padding: 8px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: 0.2s; }
         .session-item:hover { background: #f0f4ff; }
-        .session-item.active { background: #e3f2fd; border-color: #007bff; }
-        .session-id-display { font-family: monospace; font-size: 0.7rem; color: #999; padding: 4px 0; word-break: break-all; }
+        .session-item.active { background: #e3f2fd; border-left: 3px solid var(--primary); }
 
-        #onboarding-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; display: none; align-items: center; justify-content: center; }
-        .onboarding-modal { background: white; width: 90%; max-width: 600px; max-height: 80vh; border-radius: 12px; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; }
-        .onboarding-list { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
-        .onboarding-item { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #eee; border-radius: 8px; cursor: pointer; }
-        .onboarding-item:hover { background: #f9f9f9; }
-        .onboarding-item input { width: auto; margin: 0; }
-        .onboarding-section-title { font-weight: bold; margin-top: 15px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        pre.raw-json { background: #272822; color: #f8f8f2; padding: 12px; border-radius: 6px; font-size: 0.75rem; overflow-x: auto; max-height: 250px; }
+
+        /* Bottom Toast Modal */
+        #bottom-modal { position: fixed; bottom: -100px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 15px 25px; border-radius: 8px 8px 0 0; box-shadow: 0 -4px 12px rgba(0,0,0,0.15); transition: bottom 0.4s ease-out; z-index: 2000; display: flex; align-items: center; gap: 20px; min-width: 300px; }
+        #bottom-modal.active { bottom: 0; }
+        #bottom-modal .btn-ok { background: var(--success); color: white; border: none; padding: 6px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+
+        /* Onboarding (Bottom Panel Style) */
+        #onboarding-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1500; display: none; }
+        #onboarding-overlay.active { display: block; }
+        .onboarding-modal { position: fixed; bottom: -100%; left: 0; width: 100%; background: white; padding: 40px; border-top-left-radius: 24px; border-top-right-radius: 24px; box-shadow: 0 -10px 25px rgba(0,0,0,0.1); transition: bottom 0.5s cubic-bezier(0.4, 0, 0.2, 1); box-sizing: border-box; max-height: 85vh; overflow-y: auto; }
+        #onboarding-overlay.active .onboarding-modal { bottom: 0; }
     </style>
 </head>
 <body>
-    <div id="onboarding-overlay">
-        <div class="onboarding-modal">
-            <h1 style="margin-top:0;">Welcome to HydraLLM</h1>
-            <p>최초 실행을 환영합니다! 사용하실 에이전트와 모델을 선택해 주세요.</p>
-            <div id="onboarding-content" class="onboarding-list">
-                <p class="loading">가용한 에이전트를 불러오는 중...</p>
+    <div id="bottom-modal">
+        <span id="bottom-modal-msg">설정이 저장되었습니다.</span>
+        <button class="btn-ok" onclick="closeBottomModal()">확인</button>
+    </div>
+
+    <nav class="nav">
+        <div class="nav-brand" onclick="showView('dashboard')">🐉 HydraLLM</div>
+        <div class="nav-links">
+            <a class="nav-link active" onclick="showView('dashboard')">대시보드</a>
+            <a class="nav-link" onclick="showView('chat')">플레이그라운드</a>
+            <a class="nav-link" onclick="showView('logs')">시스템 로그</a>
+            <a class="nav-link" style="display:none;" onclick="showView('settings')">설정</a>
+        </div>
+        <button onclick="toggleSidebar()" class="badge badge-info" style="border:none; cursor:pointer; padding:8px 15px;">리소스 가용성</button>
+    </nav>
+
+    <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+    <div id="provider-sidebar">
+        <h3 style="margin-top:0; display:flex; justify-content:space-between; align-items:center;">
+            실시간 리소스 상태
+            <button onclick="toggleSidebar()" style="background:none; border:none; cursor:pointer; font-size:1.5rem;">&times;</button>
+        </h3>
+        <div id="sidebar-content"><p class="loading">조회 중...</p></div>
+        <button onclick="probeKeys()" style="width:100%; margin-top:20px; padding:12px; background:var(--success); color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">즉시 재검증 실행</button>
+    </div>
+
+    <div class="container">
+        <div id="view-dashboard" class="view active">
+            <div class="grid">
+                <div class="card"><div class="stat-box"><div class="stat-label">누적 토큰 사용량</div><div id="stat-tokens" class="stat-value">0</div></div></div>
+                <div class="card"><div class="stat-box"><div class="stat-label">총 요청 횟수</div><div id="stat-requests" class="stat-value">0</div></div></div>
+                <div class="card"><div class="stat-box"><div class="stat-label">시스템 가동률</div><div id="stat-health" class="stat-value">-%</div></div></div>
+                <div class="card"><div class="stat-box"><div class="stat-label">웹 스크래핑 성공률</div><div id="stat-scraping" class="stat-value">-%</div></div></div>
             </div>
-            <button onclick="saveOnboarding()" style="width: 100%; padding: 15px; font-size: 1.1rem; background: #28a745; border:none; color:white; border-radius:8px; cursor:pointer;">설정 완료 및 시작하기</button>
+            <div class="card">
+                <h3>모델별 토큰 소모량</h3>
+                <canvas id="usageChart" height="100"></canvas>
+            </div>
+            <div id="detailed-usage-container"></div>
+            <div id="scraping-usage-container"></div>
+        </div>
+
+        <div id="view-chat" class="view">
+            <div class="chat-layout">
+                <div class="chat-main">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom:1px solid #eee; padding-bottom:10px;">
+                        <div>
+                            <select id="model-select" onchange="updateModelInfo()" style="padding:6px; border-radius:4px; border:1px solid #ddd;"></select>
+                            <div id="selected-model-info" class="model-info"></div>
+                        </div>
+                        <span id="current-session-display" style="font-size:0.75rem; font-family:monospace; color:#999;"></span>
+                    </div>
+                    <div id="chat-history"></div>
+                    <div class="chat-input-area">
+                        <input type="text" id="chat-input" placeholder="질문을 입력하세요... (Enter 키로 전송)" onkeypress="if(event.key==='Enter') sendChatMessage()" style="flex:1; padding:12px; border:1px solid #ddd; border-radius:8px; font-size:1rem;">
+                        <button id="send-btn" onclick="sendChatMessage()" style="padding:0 30px; background:var(--primary); color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">전송</button>
+                    </div>
+                </div>
+                <div class="chat-sidebar">
+                    <div class="card">
+                        <h3 style="margin-top:0;">추론 옵션</h3>
+                        <div style="display:flex; flex-direction:column; gap:12px; font-size:0.85rem;">
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="auto-fetch-check" checked> 자동 웹 페칭</label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="search-check"> 웹 검색 강화</label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="compress-check" checked> 컨텍스트 압축 (Lingua)</label>
+                            <div style="margin-top:5px;">
+                                <label style="display:block; margin-bottom:5px;">Temperature: <span id="temp-val">0.7</span></label>
+                                <input type="range" id="temp-input" value="0.7" step="0.1" min="0" max="2" oninput="document.getElementById('temp-val').innerText=this.value" style="width:100%;">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3 style="margin-top:0;">세션 관리</h3>
+                        <button onclick="createNewSession()" style="width:100%; background:var(--success); color:white; border:none; padding:10px; border-radius:6px; cursor:pointer; font-weight:bold; margin-bottom:10px;">+ New Session</button>
+                        <div id="session-list" style="max-height:250px; overflow-y:auto; border:1px solid #f0f0f0; border-radius:6px;"></div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:5px; margin-top:10px;">
+                            <button onclick="exportSession()" style="padding:5px; font-size:0.75rem; background:var(--dark);">내보내기</button>
+                            <button onclick="deleteCurrentSession()" style="padding:5px; font-size:0.75rem; background:var(--danger);">세션 삭제</button>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3 style="margin-top:0;">Raw API</h3>
+                        <pre class="raw-json" id="raw-response">{}</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="view-logs" class="view">
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                    <h3 style="margin:0;">시스템 이벤트 로그</h3>
+                    <button onclick="loadLogs()" class="badge badge-info" style="border:none; cursor:pointer;">새로고침</button>
+                </div>
+                <table id="logs-table">
+                    <thead><tr><th>시간</th><th>레벨</th><th>카테고리</th><th>메시지</th><th>메타데이터</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="view-settings" class="view">
+            <div class="card">
+                <h3>API 리소스 관리</h3>
+                <div style="display:flex; gap:10px; margin-top:15px;">
+                    <select id="key-provider" style="width:120px; padding:10px;"><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="cerebras">Cerebras</option></select>
+                    <input type="text" id="new-key-input" placeholder="API Key 입력 (콤마로 다수 가능)" style="flex:1; padding:10px; border:1px solid #ddd; border-radius:4px;">
+                    <button onclick="addKeys()" style="background:var(--success); color:white; border:none; padding:10px 20px; border-radius:4px; cursor:pointer;">키 추가</button>
+                </div>
+                <hr style="margin:30px 0; border:none; border-top:1px solid #eee;">
+                <h3>고급 제어</h3>
+                <button onclick="refreshModelDiscovery()" style="padding:12px 25px; background:var(--dark); color:white; border:none; border-radius:6px; cursor:pointer;">전체 모델 정보 동기화</button>
+            </div>
         </div>
     </div>
 
-    <h1 style="font-size: 1.5rem; margin-bottom: 20px;">HydraLLM Tester</h1>
-
-    <div class="container">
-        <div class="chat-section">
-            <h2>Chat Completion</h2>
-            <div id="chat-history"></div>
-            <div class="input-group">
-                <input type="text" id="user-input" placeholder="메시지를 입력하세요..." onkeypress="if(event.key==='Enter') sendMessage()">
-                <button id="send-btn" onclick="sendMessage()">전송</button>
-            </div>
-        </div>
-
-        <div class="sidebar">
-            <div class="card">
-                <h2>Configuration</h2>
-                <div style="margin-bottom: 12px;">
-                    <label style="display:block; margin-bottom: 5px; font-weight:bold; font-size: 0.85rem;">Model Select:</label>
-                    <select id="model-select" onchange="updateModelInfo()">
-                        <option value="auto">Auto (Default)</option>
-                    </select>
-                    <div id="selected-model-info" class="model-info">
-                        모델을 선택하면 상세 정보가 표시됩니다.
-                    </div>
-                </div>
-                <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                    <input type="checkbox" id="auto-fetch-check" style="width: auto;" checked>
-                    <label for="auto-fetch-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Auto Web Fetch</label>
-                </div>
-                <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                    <input type="checkbox" id="compress-check" style="width: auto;" checked>
-                    <label for="compress-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Context Compression</label>
-                </div>
-                <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                    <input type="checkbox" id="search-check" style="width: auto;">
-                    <label for="search-check" style="font-weight:bold; font-size: 0.85rem; cursor: pointer;">Enable Web Search</label>
-                </div>
-                <div style="margin-bottom: 12px;">
-                    <label style="display:block; margin-bottom: 5px; font-weight:bold; font-size: 0.85rem;">Web Fetch URL:</label>
-                    <input type="text" id="web-fetch-input" placeholder="https://example.com" style="font-size: 0.8rem;">
-                </div>
-                <div>
-                    <label style="display:block; margin-bottom: 5px; font-weight:bold; font-size: 0.85rem;">Temperature: <span id="temp-val">0.7</span></label>
-                    <input type="range" id="temp-input" value="0.7" step="0.1" min="0" max="2" oninput="document.getElementById('temp-val').innerText=this.value">
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>Session Management</h2>
-                <div class="session-id-display">
-                    Session: <span id="current-session-id">-</span>
-                </div>
-                <div id="session-stats" class="model-info" style="margin-bottom: 10px;">
-                    Messages: <span id="msg-count">0</span> | Tokens: <span id="token-count">~0</span>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                    <button onclick="createNewSession()" style="background: #28a745; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">New Session</button>
-                    <button onclick="toggleSessionList()" style="background: #17a2b8; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Sessions</button>
-                    <button onclick="exportSession()" style="background: #6c757d; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Export</button>
-                    <button onclick="deleteCurrentSession()" style="background: #dc3545; border:none; color:white; border-radius:4px; cursor:pointer; font-size: 0.8rem; padding: 8px;">Delete</button>
-                </div>
-                <div id="session-list" style="display:none; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
-            </div>
-
-            <div class="card">
-                <h2>System Status
-                    <div style="float: right; display: flex; gap: 5px;">
-                        <button onclick="probeKeys()" id="probe-btn" style="padding: 2px 8px; font-size: 0.7rem; background: #28a745; border:none; color:white; border-radius:4px; cursor:pointer;" title="강제 재검증">재검증</button>
-                        <button onclick="refreshStatus()" style="padding: 2px 8px; font-size: 0.7rem; background: #6c757d; border:none; color:white; border-radius:4px; cursor:pointer;">새로고침</button>
-                    </div>
-                </h2>
-                <div id="status-content">
-                    <p class="loading">상태를 불러오는 중...</p>
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>Raw API Result</h2>
-                <div style="display: flex; gap: 4px; margin-bottom: 10px;">
-                    <button onclick="showRawTab('request')" id="tab-request" class="raw-tab raw-tab-active" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px; cursor:pointer;">Request</button>
-                    <button onclick="showRawTab('response')" id="tab-response" class="raw-tab" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px; cursor:pointer; background:#f8f9fa; color:#666;">Response</button>
-                </div>
-                <pre class="raw-json" id="raw-request" style="max-height:300px; overflow-y:auto;">{}</pre>
-                <pre class="raw-json" id="raw-response" style="max-height:300px; overflow-y:auto; display:none;">{}</pre>
-            </div>
+    <div id="onboarding-overlay">
+        <div class="onboarding-modal">
+            <h2>Welcome to HydraLLM</h2>
+            <p>초기 설정을 진행합니다. 사용하실 모델을 선택하세요.</p>
+            <div id="onboarding-content" style="max-height:400px; overflow-y:auto; margin:20px 0; border:1px solid #eee; padding:10px; border-radius:8px;"></div>
+            <button onclick="saveOnboarding()" style="width:100%; padding:15px; background:var(--success); color:white; border:none; border-radius:8px; cursor:pointer; font-size:1.1rem; font-weight:bold;">설정 완료 및 시작</button>
         </div>
     </div>
 
     <script>
         let availableModels = [];
-        let chatMessages = [];  // UI 표시용 로컬 메시지 (서버 세션과 별도)
-        let currentSessionId = null;
-        let onboardingData = { completed: true, available_models: [] };
+        let currentSessionId = localStorage.getItem('hydra_session_id');
+        let usageChart = null;
 
-        // ─── Session Management ───
+        function showView(name) {
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+            
+            const targetView = document.getElementById(`view-${name}`);
+            if (targetView) targetView.classList.add('active');
+            
+            const navLinks = document.querySelectorAll('.nav-link');
+            navLinks.forEach(l => { 
+                if (l.getAttribute('onclick') && l.getAttribute('onclick').includes(`'${name}'`)) {
+                    l.classList.add('active'); 
+                }
+            });
 
-        async function initSession() {
-            // localStorage에서 기존 세션 복원 시도
-            const savedId = localStorage.getItem('hydra_session_id');
-            if (savedId) {
-                try {
-                    const res = await fetch(`/v1/admin/sessions/${savedId}`);
-                    if (res.ok) {
-                        const info = await res.json();
-                        currentSessionId = savedId;
-                        updateSessionDisplay(info);
-                        // 서버에서 히스토리 복원 — UI에 표시
-                        await loadSessionHistory();
-                        return;
-                    }
-                } catch (e) { /* 세션 만료, 새로 생성 */ }
-            }
-            await createNewSession();
+            if (name === 'dashboard') loadDashboard();
+            if (name === 'logs') loadLogs();
+            if (name === 'chat') { loadModels(); loadSessions(); }
         }
 
-        async function createNewSession() {
+        function toggleSidebar() {
+            document.getElementById('provider-sidebar').classList.toggle('active');
+            document.querySelector('.sidebar-overlay').classList.toggle('active');
+            if (document.getElementById('provider-sidebar').classList.contains('active')) refreshSidebarStatus();
+        }
+
+        function showBottomModal(msg) {
+            document.getElementById('bottom-modal-msg').textContent = msg;
+            document.getElementById('bottom-modal').classList.add('active');
+            setTimeout(closeBottomModal, 5000);
+        }
+
+        function closeBottomModal() { document.getElementById('bottom-modal').classList.remove('active'); }
+
+        async function loadDashboard() {
             try {
-                const res = await fetch('/v1/admin/sessions/new', { method: 'POST' });
+                const res = await fetch('/v1/admin/dashboard');
                 const data = await res.json();
-                currentSessionId = data.session_id;
-                localStorage.setItem('hydra_session_id', currentSessionId);
-                chatMessages = [];
-                document.getElementById('chat-history').innerHTML = '';
-                addMessageToUI('system', 'New session started.', false);
-                updateSessionDisplay({ message_count: 0, estimated_tokens: 0 });
-            } catch (e) {
-                console.error('Failed to create session:', e);
-            }
-        }
-
-        async function loadSessionHistory() {
-            // 서버에서 세션 컨텍스트를 가져와 UI에 복원
-            // 세션 상세에서 메시지 수 확인 후, 기본적으로 로컬 chatMessages 비우고 재구성
-            chatMessages = [];
-            document.getElementById('chat-history').innerHTML = '';
-            addMessageToUI('system', `Session resumed: ${currentSessionId.substring(0, 16)}...`, false);
-        }
-
-        async function switchSession(sessionId) {
-            currentSessionId = sessionId;
-            localStorage.setItem('hydra_session_id', sessionId);
-            try {
-                const res = await fetch(`/v1/admin/sessions/${sessionId}`);
-                if (res.ok) {
-                    const info = await res.json();
-                    updateSessionDisplay(info);
-                    await loadSessionHistory();
+                document.getElementById('stat-tokens').textContent = (data.total_tokens || 0).toLocaleString();
+                document.getElementById('stat-requests').textContent = (data.total_requests || 0).toLocaleString();
+                const providers = data.health || [];
+                const healthyCount = providers.filter(h => h.status === 'healthy').length;
+                document.getElementById('stat-health').textContent = providers.length ? Math.round((healthyCount/providers.length)*100)+'%' : '-';
+                updateUsageChart(data.providers || []);
+                if (data.scraping) {
+                    const s = data.scraping;
+                    const rate = s.total ? Math.round(((s.total - s.fails) / s.total) * 100) : 0;
+                    document.getElementById('stat-scraping').textContent = `${rate}% (${s.total}회)`;
+                    updateScrapingTable(s.recent || []);
                 }
-            } catch (e) {
-                console.error('Failed to switch session:', e);
-            }
+            } catch (e) { console.error(e); }
         }
 
-        async function deleteCurrentSession() {
-            if (!currentSessionId || !confirm('현재 세션을 삭제하시겠습니까?')) return;
+        function updateUsageChart(usageData) {
+            const ctx = document.getElementById('usageChart').getContext('2d');
+            if (!usageData || usageData.length === 0) { if (usageChart) usageChart.destroy(); return; }
+            const labels = usageData.map(u => `${u.provider}/${u.model}`);
+            if (usageChart) usageChart.destroy();
+            usageChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Tokens by Model',
+                        data: usageData.map(u => u.total),
+                        backgroundColor: 'rgba(0, 123, 255, 0.6)',
+                        borderColor: 'rgba(0, 123, 255, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+            const container = document.getElementById('detailed-usage-container');
+            container.innerHTML = `<div class="card"><h3>상세 리포트</h3><table><thead><tr><th>Provider</th><th>Model</th><th>Prompt</th><th>Completion</th><th>Total</th><th>Count</th></tr></thead><tbody>${usageData.map(u => `<tr><td>${u.provider.toUpperCase()}</td><td><code>${u.model}</code></td><td>${(u.prompt||0).toLocaleString()}</td><td>${(u.completion||0).toLocaleString()}</td><td><strong>${(u.total||0).toLocaleString()}</strong></td><td>${u.count||0}</td></tr>`).join('')}</tbody></table></div>`;
+        }
+
+        function updateScrapingTable(recentData) {
+            let container = document.getElementById('scraping-usage-container');
+            if (!container) { container = document.createElement('div'); container.id = 'scraping-usage-container'; container.className = 'card'; document.getElementById('view-dashboard').appendChild(container); }
+            container.innerHTML = `<h3>최근 웹 스크래핑 내역</h3><table><thead><tr><th>Time</th><th>URL</th><th>Status</th><th>Length</th><th>Latency</th></tr></thead><tbody>${recentData.map(r => `<tr><td>${new Date(r.created_at).toLocaleTimeString()}</td><td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${r.url}</td><td><span class="badge badge-${r.status==='success'?'success':(r.status==='cache_hit'?'info':'danger')}">${r.status}</span></td><td>${r.chars_count.toLocaleString()}자</td><td>${r.latency_ms}ms</td></tr>`).join('')}</tbody></table>`;
+        }
+
+        async function refreshSidebarStatus() {
+            const content = document.getElementById('sidebar-content');
             try {
-                await fetch(`/v1/admin/sessions/${currentSessionId}`, { method: 'DELETE' });
-                localStorage.removeItem('hydra_session_id');
-                await createNewSession();
-            } catch (e) { alert('삭제 실패: ' + e.message); }
+                const res = await fetch('/v1/admin/status');
+                const data = await res.json();
+                const providers = data.status.providers || {};
+                const keyStats = data.key_statistics || {};
+                let html = '';
+                for (const [name, info] of Object.entries(providers)) {
+                    const stats = keyStats[name] || { keys: [] };
+                    html += `<div style="margin-bottom:15px; padding:12px; border:1px solid #eee; border-radius:8px; background:#fafafa;"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><strong>${name.toUpperCase()}</strong><span class="badge badge-${info.healthy ? 'success' : 'danger'}">${info.healthy?'Active':'Offline'}</span></div><div style="font-size:0.75rem; color:#666; margin-bottom:8px;">Keys: ${info.active_keys} active / ${info.total_keys} total</div><div style="display:flex; flex-wrap:wrap; gap:4px;">${stats.keys.map(k => `<span class="badge ${k.status==='active'?'badge-info':'badge-danger'}" style="font-size:0.6rem; padding:1px 5px;" title="${k.id}">${k.tier}</span>`).join('')}</div></div>`;
+                }
+                content.innerHTML = html;
+            } catch (e) { content.innerHTML = '<p style="color:red;">정보 로드 실패</p>'; }
         }
 
-        async function toggleSessionList() {
-            const listEl = document.getElementById('session-list');
-            if (listEl.style.display === 'none') {
-                listEl.style.display = 'block';
-                try {
-                    const res = await fetch('/v1/admin/sessions');
-                    const sessions = await res.json();
-                    listEl.innerHTML = sessions.length === 0
-                        ? '<div style="font-size:0.8rem; color:#999; text-align:center;">No sessions</div>'
-                        : sessions.map(s => `
-                            <div class="session-item ${s.session_id === currentSessionId ? 'active' : ''}"
-                                 onclick="switchSession('${s.session_id}')">
-                                <div>
-                                    <div style="font-weight:bold;">${s.title || 'Session'}</div>
-                                    <div style="font-size:0.65rem; color:#999;">${s.session_id.substring(0, 16)}... | ${s.message_count} msgs</div>
-                                </div>
-                                <div style="font-size:0.65rem; color:#aaa;">${new Date(s.updated_at).toLocaleString('ko')}</div>
-                            </div>
-                        `).join('');
-                } catch (e) { listEl.innerHTML = '<div style="color:red; font-size:0.8rem;">Load failed</div>'; }
+        async function sendChatMessage() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (!text) return;
+            appendMsg('user', text);
+            input.value = '';
+            document.getElementById('send-btn').disabled = true;
+            const loading = document.createElement('div'); loading.className = 'message msg-assistant loading'; loading.textContent = 'Thinking...'; document.getElementById('chat-history').appendChild(loading);
+            try {
+                const res = await fetch('/v1/chat/completions', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: document.getElementById('model-select').value, messages: [{role: 'user', content: text}], session_id: currentSessionId, has_search: document.getElementById('search-check').checked, auto_web_fetch: document.getElementById('auto-fetch-check').checked, compress_context: document.getElementById('compress-check').checked, temperature: parseFloat(document.getElementById('temp-input').value) })
+                });
+                const data = await res.json(); loading.remove();
+                if (res.ok) { 
+                    appendMsg('assistant', data.choices[0].message.content, data); 
+                    document.getElementById('raw-response').textContent = JSON.stringify(data, null, 2); 
+                }
+                else { appendMsg('system', `Error: ${data.detail || 'Unknown failure'}`); }
+            } catch (e) { loading.textContent = 'Fetch error: ' + e.message; }
+            finally { document.getElementById('send-btn').disabled = false; document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight; }
+        }
+
+        function appendMsg(role, content, data = null) {
+            const hist = document.getElementById('chat-history');
+            const div = document.createElement('div');
+            div.className = `message msg-${role} ${role === 'assistant' ? 'markdown-body' : ''}`;
+            
+            if (role === 'assistant') {
+                div.innerHTML = DOMPurify.sanitize(marked.parse(content));
+                
+                if (data && data.usage && (data.usage.gateway_provider || data.usage.gateway_model)) {
+                    const meta = document.createElement('div');
+                    meta.style.cssText = 'font-size:0.7rem; color:#555; margin-top:10px; padding:10px; border-top:1px solid #eee; background:rgba(0,0,0,0.02); border-radius:4px; display:flex; justify-content:space-between; align-items:center;';
+                    
+                    const modelPath = data.usage.gateway_model || '';
+                    const provider = (data.usage.gateway_provider || 'unknown').toUpperCase();
+                    
+                    // 제공자 및 모델 상세 경로 표시
+                    const displayPath = modelPath.includes('LOCAL-AGENT') ? modelPath : `${provider}/${modelPath}`;
+                    
+                    meta.innerHTML = `<div><span style="color:#888;">via</span> <span style="font-family:monospace; font-weight:bold;">${displayPath}</span></div> <span class="badge badge-info" style="font-size:0.6rem; opacity:0.8;">Key #${data.usage.gateway_key_index || 0}</span>`;
+                    div.appendChild(meta);
+                }
             } else {
-                listEl.style.display = 'none';
+                div.textContent = content;
             }
+            
+            hist.appendChild(div);
+            hist.scrollTop = hist.scrollHeight;
         }
-
-        function updateSessionDisplay(info) {
-            document.getElementById('current-session-id').textContent = currentSessionId ? currentSessionId.substring(0, 20) + '...' : '-';
-            document.getElementById('msg-count').textContent = info.message_count || 0;
-            document.getElementById('token-count').textContent = '~' + (info.estimated_tokens || 0);
-        }
-
-        async function refreshSessionStats() {
-            if (!currentSessionId) return;
-            try {
-                const res = await fetch(`/v1/admin/sessions/${currentSessionId}`);
-                if (res.ok) {
-                    const info = await res.json();
-                    updateSessionDisplay(info);
-                }
-            } catch (e) { /* ignore */ }
-        }
-
-        function exportSession() {
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({
-                session_id: currentSessionId,
-                messages: chatMessages,
-                exported_at: new Date().toISOString()
-            }, null, 2));
-            const dl = document.createElement('a');
-            dl.setAttribute("href", dataStr);
-            dl.setAttribute("download", `session_${currentSessionId || 'unknown'}.json`);
-            dl.click();
-        }
-
-        // ─── Raw Tab ───
-
-        function showRawTab(tab) {
-            const reqEl = document.getElementById('raw-request');
-            const resEl = document.getElementById('raw-response');
-            const tabReq = document.getElementById('tab-request');
-            const tabRes = document.getElementById('tab-response');
-            if (tab === 'request') {
-                reqEl.style.display = 'block'; resEl.style.display = 'none';
-                tabReq.className = 'raw-tab raw-tab-active';
-                tabRes.className = 'raw-tab'; tabRes.style.background = '#f8f9fa'; tabRes.style.color = '#666';
-            } else {
-                reqEl.style.display = 'none'; resEl.style.display = 'block';
-                tabRes.className = 'raw-tab raw-tab-active';
-                tabReq.className = 'raw-tab'; tabReq.style.background = '#f8f9fa'; tabReq.style.color = '#666';
-            }
-        }
-
-        // ─── Markdown ───
-
-        marked.setOptions({
-            highlight: function(code, lang) {
-                const language = hljs.getLanguage(lang) ? lang : 'plaintext';
-                return hljs.highlight(code, { language }).value;
-            },
-            langPrefix: 'hljs language-'
-        });
-
-        // ─── Onboarding ───
-
-        async function checkOnboarding() {
-            try {
-                const response = await fetch('/v1/admin/onboarding');
-                onboardingData = await response.json();
-                if (!onboardingData.completed) showOnboarding();
-            } catch (e) { console.error('Onboarding check failed:', e); }
-        }
-
-        function showOnboarding() {
-            const overlay = document.getElementById('onboarding-overlay');
-            const content = document.getElementById('onboarding-content');
-            overlay.style.display = 'flex';
-            let html = '';
-            const models = onboardingData.available_models || [];
-            const cloudModels = models.filter(m => m.owned_by !== 'local-agent');
-            const localModels = models.filter(m => m.owned_by === 'local-agent');
-            if (cloudModels.length > 0) {
-                html += '<div class="onboarding-section-title">Cloud Models</div>';
-                cloudModels.forEach(m => {
-                    html += `<label class="onboarding-item"><input type="checkbox" name="model-select" value="${m.id}" checked><div><strong>${m.display_name || m.id}</strong><div style="font-size:0.7rem; color:#666;">${m.owned_by} | Tier: ${m.tier}</div></div></label>`;
-                });
-            }
-            if (localModels.length > 0) {
-                html += '<div class="onboarding-section-title">Local Agents</div>';
-                localModels.forEach(m => {
-                    html += `<label class="onboarding-item"><input type="checkbox" name="model-select" value="${m.id}" checked><div><strong>${m.display_name || m.id}</strong><div style="font-size:0.7rem; color:#666;">${m.owned_by}</div></div></label>`;
-                });
-            }
-            content.innerHTML = html;
-        }
-
-        async function saveOnboarding() {
-            const checkboxes = document.querySelectorAll('input[name="model-select"]:checked');
-            const enabledModels = Array.from(checkboxes).map(cb => cb.value);
-            try {
-                const response = await fetch('/v1/admin/onboarding', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled_models: enabledModels })
-                });
-                if (response.ok) {
-                    document.getElementById('onboarding-overlay').style.display = 'none';
-                    await loadModels();
-                    refreshStatus();
-                }
-            } catch (e) { alert('Save failed: ' + e.message); }
-        }
-
-        // ─── Models ───
 
         async function loadModels() {
-            const select = document.getElementById('model-select');
             try {
-                const response = await fetch('/v1/models');
-                const data = await response.json();
-                availableModels = data.data || [];
-                select.innerHTML = '';
-                const globalAuto = availableModels.find(m => m.id === 'auto');
-                if (globalAuto) {
-                    const opt = document.createElement('option');
-                    opt.value = globalAuto.id;
-                    opt.textContent = `Auto (${globalAuto.display_name})`;
-                    select.appendChild(opt);
-                }
-                const cloudModels = availableModels.filter(m => m.owned_by !== 'local-agent' && m.owned_by !== 'gateway');
-                const localModels = availableModels.filter(m => m.owned_by === 'local-agent');
-                const tierOrder = { 'free': 0, 'experimental': 1, 'standard': 2, 'premium': 3 };
-                const sorter = (a, b) => {
-                    if (a.id.endsWith('/auto') && !b.id.endsWith('/auto')) return -1;
-                    if (!a.id.endsWith('/auto') && b.id.endsWith('/auto')) return 1;
-                    const tierA = tierOrder[a.tier] !== undefined ? tierOrder[a.tier] : 2;
-                    const tierB = tierOrder[b.tier] !== undefined ? tierOrder[b.tier] : 2;
-                    if (tierA !== tierB) return tierA - tierB;
-                    return a.id.localeCompare(b.id);
-                };
-                const addGroup = (label, models) => {
-                    if (models.length === 0) return;
-                    const group = document.createElement('optgroup');
-                    group.label = label;
-                    models.sort(sorter).forEach(m => {
-                        if (m.id === 'auto') return;
-                        const opt = document.createElement('option');
-                        opt.value = m.id;
-                        const multi = m.capabilities.multimodal ? '🖼️ ' : '';
-                        const search = m.capabilities.has_search ? '🌐 ' : '';
-                        const prefix = m.id.endsWith('/auto') ? '✨ ' : '';
-                        opt.textContent = `${prefix}${multi}${search}${m.display_name || m.id}`;
-                        group.appendChild(opt);
-                    });
-                    select.appendChild(group);
-                };
-                addGroup('Cloud Models', cloudModels);
-                addGroup('Local Agents', localModels);
+                const res = await fetch('/v1/models');
+                const data = await res.json(); availableModels = data.data;
+                const select = document.getElementById('model-select');
+                select.innerHTML = '<option value="auto">✨ mllm/auto (지능형 자동 라우팅)</option>' + availableModels.map(m => `<option value="${m.id}">${m.display_name || m.id}</option>`).join('');
                 updateModelInfo();
-            } catch (err) { select.innerHTML = '<option disabled>Load failed</option>'; }
+            } catch (e) {}
         }
 
         function updateModelInfo() {
             const id = document.getElementById('model-select').value;
             const infoDiv = document.getElementById('selected-model-info');
-            if (id.endsWith('/auto') || id === 'auto') {
-                infoDiv.innerHTML = '입력 토큰 수에 따라 최적의 모델로 자동 라우팅합니다.';
-                return;
-            }
+            if (id === 'auto') { infoDiv.textContent = '토큰 수와 의도에 맞춰 최적의 모델을 자동 선택합니다.'; return; }
             const model = availableModels.find(m => m.id === id);
-            if (model) {
-                const caps = [];
-                if (model.capabilities.multimodal) caps.push('🖼️ Multimodal');
-                if (model.capabilities.has_search) caps.push('🌐 Web Search');
-                infoDiv.innerHTML = `<div><strong>Provider:</strong> ${model.owned_by} <span class="tier-badge tier-${model.tier}">${model.tier}</span></div><div><strong>Max Tokens:</strong> ${model.capabilities.max_tokens.toLocaleString()}</div>${caps.length > 0 ? `<div style="margin-top:5px; font-weight:bold; color:#007bff;">Capabilities: ${caps.join(', ')}</div>` : ''}${model.description ? `<div style="margin-top:5px; font-style:italic; color:#777;">${model.description}</div>` : ''}`;
-            }
+            if (model) infoDiv.textContent = `${model.owned_by} | Tier: ${model.tier} | Max: ${model.capabilities.max_tokens}`;
         }
 
-        // ─── Status ───
+        async function createNewSession() {
+            const res = await fetch('/v1/admin/sessions/new', { method: 'POST' });
+            const data = await res.json();
+            currentSessionId = data.session_id; localStorage.setItem('hydra_session_id', currentSessionId);
+            document.getElementById('chat-history').innerHTML = '';
+            document.getElementById('current-session-display').textContent = 'SID: ' + currentSessionId.substring(0,10);
+            appendMsg('system', '새 대화 세션이 시작되었습니다.');
+            loadSessions();
+        }
 
-        async function refreshStatus() {
-            const statusDiv = document.getElementById('status-content');
+        async function loadSessions() {
             try {
-                const response = await fetch('/v1/admin/status');
-                const data = await response.json();
-                let html = '<div style="display:flex; flex-direction:column; gap:10px;">';
-                const statusObj = data.status || {};
-                const providers = statusObj.providers || {};
-                const agents = statusObj.agents || {};
-                const keyStats = data.key_statistics || {};
-                html += '<div style="font-weight:bold; font-size:0.85rem; color:#333;">Cloud Providers</div>';
-                for (const [name, info] of Object.entries(providers)) {
-                    const statusClass = info.healthy ? 'status-healthy' : 'status-unhealthy';
-                    const providerKeyData = keyStats[name] || { keys: [] };
-                    html += `<div style="border-bottom: 1px solid #f0f0f0; padding-bottom:5px; margin-bottom:5px;"><div style="display:flex; justify-content:space-between; align-items:center;"><strong>${name.toUpperCase()}</strong><span class="status-badge ${statusClass}">${info.healthy ? 'OK' : 'ERROR'}</span></div><div style="font-size:0.75rem; color:#666;">Keys: ${info.active_keys} active / ${info.failed_keys} failed</div><div style="margin-top:5px; display:flex; flex-wrap:wrap; gap:3px;">${(providerKeyData.keys || []).map(k => `<span title="Tier: ${k.tier}, Usage: ${k.usage}" style="font-size:0.6rem; padding:1px 4px; border-radius:3px; background:${k.status === 'active' ? (k.tier === 'premium' ? '#fff3e0' : '#e8f5e9') : '#ffebee'}; color:${k.status === 'active' ? (k.tier === 'premium' ? '#ef6c00' : '#2e7d32') : '#c62828'}; border:1px solid ${k.status === 'active' ? (k.tier === 'premium' ? '#ffe0b2' : '#c8e6c9') : '#ffcdd2'};">${k.id}</span>`).join('')}</div></div>`;
-                }
-                html += '<div style="font-weight:bold; font-size:0.85rem; margin-top:10px; color:#333;">Local Agents</div>';
-                for (const [name, info] of Object.entries(agents)) {
-                    const statusClass = info.healthy ? 'status-healthy' : 'status-unhealthy';
-                    html += `<div style="border-bottom: 1px solid #f0f0f0; padding-bottom:5px; margin-bottom:5px;"><div style="display:flex; justify-content:space-between; align-items:center;"><strong>${name.toUpperCase()}</strong><span class="status-badge ${statusClass}">${info.healthy ? 'ON' : 'OFF'}</span></div><div style="font-size:0.7rem; color:#888;">${info.base_url || 'CLI mode'}</div></div>`;
-                }
-                statusDiv.innerHTML = html + '</div>';
-            } catch (err) { statusDiv.innerHTML = '<p class="status-unhealthy">Status Load Failed</p>'; }
+                const res = await fetch('/v1/admin/sessions');
+                const data = await res.json();
+                const list = document.getElementById('session-list');
+                list.innerHTML = data.map(s => `<div onclick="switchSession('${s.session_id}')" class="session-item ${s.session_id===currentSessionId?'active':''}"><strong>${s.title||'Conversation'}</strong><br><small>${new Date(s.updated_at).toLocaleString()}</small></div>`).join('');
+                if (currentSessionId) document.getElementById('current-session-display').textContent = 'SID: ' + currentSessionId.substring(0,10);
+            } catch (e) {}
         }
 
-        async function probeKeys() {
-            const btn = document.getElementById('probe-btn');
-            const originalText = btn.innerText;
-            btn.disabled = true; btn.innerText = '...';
+        async function switchSession(sid) {
+            currentSessionId = sid; localStorage.setItem('hydra_session_id', sid);
+            document.getElementById('chat-history').innerHTML = ''; appendMsg('system', '세션이 복원되었습니다.');
+            loadSessions();
+        }
+
+        async function loadLogs() {
             try {
-                await fetch('/v1/admin/probe', { method: 'POST' });
-                alert('재검증 시작됨');
-                refreshStatus();
-            } catch (err) { alert('실패: ' + err.message); }
-            finally { btn.disabled = false; btn.innerText = originalText; }
-        }
-
-        // ─── UI Message Helpers ───
-
-        function addMessageToUI(role, content, save = true) {
-            const history = document.getElementById('chat-history');
-            const msgDiv = document.createElement('div');
-            const cssClass = role === 'system' ? 'system-message' : (role === 'user' ? 'user-message' : 'bot-message');
-            msgDiv.className = `message ${cssClass} ${role === 'assistant' ? 'markdown-body' : ''}`;
-            if (role === 'assistant') msgDiv.innerHTML = marked.parse(content);
-            else msgDiv.textContent = content;
-            history.appendChild(msgDiv);
-            history.scrollTop = history.scrollHeight;
-            if (save && role !== 'system') {
-                chatMessages.push({ role, content });
-            }
-        }
-
-        // ─── Send Message (서버 세션 기반) ───
-
-        async function sendMessage() {
-            const input = document.getElementById('user-input');
-            const btn = document.getElementById('send-btn');
-            const model = document.getElementById('model-select').value;
-            const search = document.getElementById('search-check').checked;
-            const autoFetch = document.getElementById('auto-fetch-check').checked;
-            const compressCtx = document.getElementById('compress-check').checked;
-            const webFetchInput = document.getElementById('web-fetch-input');
-            const webFetch = webFetchInput ? webFetchInput.value.trim() : null;
-            const temp = parseFloat(document.getElementById('temp-input').value);
-            if (!input.value.trim()) return;
-
-            const text = input.value;
-            input.value = '';
-            addMessageToUI('user', text);
-            btn.disabled = true;
-
-            const history = document.getElementById('chat-history');
-            const loadingMsg = document.createElement('div');
-            loadingMsg.className = 'message bot-message loading';
-            loadingMsg.textContent = '...';
-            history.appendChild(loadingMsg);
-            history.scrollTop = history.scrollHeight;
-
-            // 서버 세션 기반: 새 메시지만 전송 + session_id
-            const requestBody = {
-                model: model,
-                messages: [{ role: 'user', content: text }],
-                temperature: temp,
-                has_search: search,
-                auto_web_fetch: autoFetch,
-                compress_context: compressCtx,
-                session_id: currentSessionId,
-                web_fetch: webFetch || undefined
-            };
-
-            document.getElementById('raw-request').textContent = JSON.stringify(requestBody, null, 2);
-
-            try {
-                const response = await fetch('/v1/chat/completions', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestBody)
-                });
-                const data = await response.json();
-
-                if (data._gateway_debug) {
-                    const debug = data._gateway_debug;
-                    document.getElementById('raw-request').textContent = JSON.stringify({
-                        "원본 요청 (Before Gateway)": debug.request_before,
-                        "실제 전달 (After Gateway)": debug.request_after
-                    }, null, 2);
-                    const responseOnly = { ...data };
-                    delete responseOnly._gateway_debug;
-                    document.getElementById('raw-response').textContent = JSON.stringify(responseOnly, null, 2);
+                const res = await fetch('/v1/admin/logs?limit=50');
+                const data = await res.json();
+                const tbody = document.querySelector('#logs-table tbody');
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px; color:#888;">기록된 로그가 없습니다.</td></tr>';
                 } else {
-                    document.getElementById('raw-response').textContent = JSON.stringify(data, null, 2);
+                    tbody.innerHTML = data.map(l => `<tr><td>${new Date(l.created_at).toLocaleTimeString()}</td><td><span class="badge badge-${l.level.toLowerCase()==='error'?'danger':(l.level.toLowerCase()==='warning'?'warning':'info')}">${l.level}</span></td><td>${l.category}</td><td>${l.message}</td><td style="font-family:monospace; font-size:0.65rem; color:#888;">${l.metadata}</td></tr>`).join('');
                 }
-
-                if (history.contains(loadingMsg)) history.removeChild(loadingMsg);
-
-                if (response.ok) {
-                    const content = (data.choices && data.choices[0] && data.choices[0].message)
-                        ? data.choices[0].message.content : "No response";
-                    const botMsg = document.createElement('div');
-                    botMsg.className = 'message bot-message markdown-body';
-                    botMsg.innerHTML = marked.parse(content);
-                    if (data.usage && (data.usage.gateway_key_id || data.usage.gateway_model)) {
-                        const meta = document.createElement('div');
-                        meta.style.cssText = 'font-size:0.65rem; color:#999; margin-top:12px; padding-top:8px; border-top:1px solid #eee;';
-                        meta.innerHTML = `<strong>${data.usage.gateway_model || ''}</strong> via <code>${data.usage.gateway_key_id || 'unknown'}</code>`;
-                        botMsg.appendChild(meta);
-                    }
-                    history.appendChild(botMsg);
-                    chatMessages.push({ role: 'assistant', content: content });
-                } else {
-                    const errMsg = document.createElement('div');
-                    errMsg.className = 'message bot-message status-unhealthy';
-                    errMsg.textContent = `Error: ${data.detail || 'Unknown error'}`;
-                    history.appendChild(errMsg);
-                }
-            } catch (err) {
-                if (history.contains(loadingMsg)) history.removeChild(loadingMsg);
-                const errMsg = document.createElement('div');
-                errMsg.className = 'message bot-message status-unhealthy';
-                errMsg.textContent = `Fetch Error: ${err.message}`;
-                history.appendChild(errMsg);
-            } finally {
-                btn.disabled = false;
-                history.scrollTop = history.scrollHeight;
-                refreshStatus();
-                refreshSessionStats();
-            }
+            } catch (e) { console.error('Log load failed:', e); }
         }
 
-        // ─── Init ───
+        async function probeKeys() { await fetch('/v1/admin/probe', { method: 'POST' }); showBottomModal('재검증 작업이 시작되었습니다.'); refreshSidebarStatus(); }
 
-        window.onload = async function() {
-            await initSession();
-            checkOnboarding();
-            loadModels();
-            refreshStatus();
+        async function addKeys() {
+            const p = document.getElementById('key-provider').value; const k = document.getElementById('new-key-input').value;
+            if (!k) return;
+            await fetch(`/v1/admin/keys?provider=${p}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(k.split(',').map(s=>s.trim())) });
+            showBottomModal('키가 추가되었습니다.'); document.getElementById('new-key-input').value = ''; refreshSidebarStatus();
+        }
+
+        async function refreshModelDiscovery() { await fetch('/v1/admin/refresh-models', { method: 'POST' }); showBottomModal('모델 정보 동기화 완료'); loadModels(); }
+
+        function exportSession() {
+            const blob = new Blob([JSON.stringify({session_id: currentSessionId, export_at: new Date()})], {type: 'application/json'});
+            const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=`session_${currentSessionId}.json`; a.click();
+        }
+
+        async function deleteCurrentSession() {
+            if (!confirm('현재 세션을 영구 삭제하시겠습니까?')) return;
+            await fetch(`/v1/admin/sessions/${currentSessionId}`, { method: 'DELETE' });
+            localStorage.removeItem('hydra_session_id'); createNewSession();
+        }
+
+        async function checkOnboarding() {
+            try {
+                const res = await fetch('/v1/admin/onboarding');
+                const data = await res.json();
+                const overlay = document.getElementById('onboarding-overlay');
+                if (data.completed) { overlay.classList.remove('active'); overlay.style.display = 'none'; return; }
+                const content = document.getElementById('onboarding-content');
+                if (!data.available_models || data.available_models.length === 0) {
+                    content.innerHTML = '<p style="text-align:center; padding:20px; color:#888;">가용한 모델을 탐색 중입니다. 잠시만 기다려 주세요...<br><br><button onclick="checkOnboarding()" style="padding:5px 15px; cursor:pointer;">목록 새로고침</button></p>';
+                } else {
+                    content.innerHTML = data.available_models.map(m => `<label style="display:flex; align-items:center; gap:10px; padding:8px; border-bottom:1px solid #f0f0f0; cursor:pointer;"><input type="checkbox" name="model-select" value="${m.id}" checked><span><strong>${m.display_name || m.id}</strong> <small style="color:#888;">(${m.owned_by})</small></span></label>`).join('');
+                }
+                overlay.style.display = 'block'; setTimeout(() => overlay.classList.add('active'), 10);
+            } catch (e) { console.error(e); }
+        }
+
+        async function saveOnboarding() {
+            const enabled = Array.from(document.querySelectorAll('input[name="model-select"]:checked')).map(i => i.value);
+            await fetch('/v1/admin/onboarding', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ enabled_models: enabled }) });
+            const overlay = document.getElementById('onboarding-overlay'); overlay.classList.remove('active'); setTimeout(() => overlay.style.display = 'none', 500);
+            showBottomModal('설정이 완료되었습니다.'); loadModels();
+        }
+
+        window.onload = () => {
+            if (!currentSessionId) createNewSession();
+            setTimeout(loadSessions, 0); setTimeout(loadModels, 100); setTimeout(loadDashboard, 200); setTimeout(checkOnboarding, 500);
         };
     </script>
 </body>

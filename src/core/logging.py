@@ -1,8 +1,17 @@
 import logging
 import sys
+from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
 
 from src.core.config import settings
+
+request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
+
+
+class RequestIDFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = request_id_ctx.get()
+        return True
 
 
 def setup_logging(log_level: str | None = None) -> None:
@@ -21,11 +30,19 @@ def setup_logging(log_level: str | None = None) -> None:
     )
     handlers.append(file_handler)
 
+    rid_filter = RequestIDFilter()
+    for h in handlers:
+        h.addFilter(rid_filter)
+
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(asctime)s [%(request_id)s] - %(name)s - %(levelname)s - %(message)s",
         handlers=handlers,
     )
+
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     logger = logging.getLogger(__name__)
     logger.info(f"Logging configured at level: {log_level} (Writing to gateway.log)")

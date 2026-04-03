@@ -26,12 +26,14 @@ class ModelType(Enum):
     Supported model types for each provider.
     """
 
+    GEMINI_3_1_PRO = "gemini-3.1-pro"
+    GEMINI_3_PRO = "gemini-3.0-pro"
+    GEMINI_3_FLASH = "gemini-3.0-flash"
+    GEMINI_2_5_PRO = "gemini-2.5-pro"
     GEMINI_2_5_FLASH = "gemini-2.5-flash"
     GEMINI_2_0_PRO = "gemini-2.0-pro"
     GEMINI_2_0_FLASH = "gemini-2.0-flash"
     GEMINI_2_0_THINKING = "gemini-2.0-thinking"
-    GEMINI_1_5_PRO = "gemini-1.5-pro"
-    GEMINI_1_5_FLASH = "gemini-1.5-flash"
     GEMINI_PRO = "gemini-pro"
     GEMINI_PRO_VISION = "gemini-pro-vision"
     GEMINI_FLASH = "gemini-flash"
@@ -70,6 +72,17 @@ class TierType(Enum):
     PREMIUM = "premium"
     EXPERIMENTAL = "experimental"
     UNKNOWN = "unknown"
+
+
+class PartType(str, Enum):
+    """메시지 파트 타입."""
+
+    TEXT = "text"
+    WEB_FETCH = "web_fetch"
+    WEB_SEARCH = "web_search"
+    COMPACTION = "compaction"
+    STEP_COST = "step_cost"
+    RETRY = "retry"
 
 
 class RoutingReason(Enum):

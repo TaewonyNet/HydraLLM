@@ -1,100 +1,107 @@
-class ProviderError(Exception):
-    """Base exception for provider errors."""
-
-    pass
+from enum import Enum
 
 
-class ResourceExhaustedError(Exception):
-    """Raised when all resources are exhausted."""
-
-    pass
-
-
-class ConfigurationError(Exception):
-    """Raised when configuration is invalid."""
-
-    pass
+class ErrorCategory(Enum):
+    RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
+    AUTH_FAILURE = "AUTH_FAILURE"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+    CONFIG_ERROR = "CONFIG_ERROR"
 
 
-class RoutingError(Exception):
-    """Raised when routing fails."""
-
-    pass
-
-
-class AuthenticationError(Exception):
-    """Raised when authentication fails."""
-
-    pass
+class BaseAppError(Exception):
+    def __init__(
+        self, message: str, category: ErrorCategory = ErrorCategory.INTERNAL_ERROR
+    ):
+        self.message = message
+        self.category = category
+        super().__init__(self.message)
 
 
-class RateLimitError(Exception):
-    """Raised when rate limit is exceeded."""
-
-    pass
-
-
-class ModelNotFoundError(Exception):
-    """Raised when requested model is not found."""
-
-    pass
+class ProviderError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.SERVICE_UNAVAILABLE)
 
 
-class RequestValidationError(Exception):
-    """Raised when request validation fails."""
-
-    pass
-
-
-class ResponseFormatError(Exception):
-    """Raised when response format is invalid."""
-
-    pass
+class ResourceExhaustedError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.RESOURCE_EXHAUSTED)
 
 
-class ProviderConnectionError(Exception):
-    """Raised when connection to provider fails."""
-
-    pass
-
-
-class ProviderTimeoutError(Exception):
-    """Raised when request times out."""
-
-    pass
+class ConfigurationError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.CONFIG_ERROR)
 
 
-class UnsupportedFeatureError(Exception):
-    """Raised when requested feature is not supported."""
-
-    pass
-
-
-class ContentFilterError(Exception):
-    """Raised when content filtering fails."""
-
-    pass
+class RoutingError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.INTERNAL_ERROR)
 
 
-class InvalidRequestError(Exception):
-    """Raised when request is invalid."""
+class AuthenticationError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.AUTH_FAILURE)
 
-    pass
+
+class RateLimitError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.RESOURCE_EXHAUSTED)
 
 
-class ServiceUnavailableError(Exception):
-    """Raised when service is unavailable."""
+class ModelNotFoundError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.MODEL_NOT_FOUND)
 
-    pass
+
+class RequestValidationError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.VALIDATION_ERROR)
+
+
+class ResponseFormatError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.INTERNAL_ERROR)
+
+
+class ProviderConnectionError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.SERVICE_UNAVAILABLE)
+
+
+class ProviderTimeoutError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.SERVICE_UNAVAILABLE)
+
+
+class ServiceUnavailableError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.SERVICE_UNAVAILABLE)
+
+
+class InvalidRequestError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.VALIDATION_ERROR)
+
+
+class UnsupportedFeatureError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.VALIDATION_ERROR)
+
+
+class ContentFilterError(BaseAppError):
+    def __init__(self, message: str):
+        super().__init__(message, ErrorCategory.SERVICE_UNAVAILABLE)
 
 
 class ProviderRateLimitError(ProviderError):
-    """Raised when a provider returns rate limit error."""
-
-    pass
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.category = ErrorCategory.RESOURCE_EXHAUSTED
 
 
 class ProviderServerError(ProviderError):
-    """Raised when a provider returns server error."""
-
-    pass
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.category = ErrorCategory.SERVICE_UNAVAILABLE

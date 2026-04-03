@@ -169,6 +169,7 @@ class LocalCLIAdapter(ILLMProvider):
                     "completion_tokens": 0,
                     "total_tokens": 0,
                 },
+                session_id=None,
             )
 
         except Exception as e:
@@ -196,6 +197,7 @@ class LocalCLIAdapter(ILLMProvider):
             model=model_name,
             choices=choices,
             usage={},
+            session_id=None,
         )
 
     async def discover_models(self) -> list[dict[str, Any]]:

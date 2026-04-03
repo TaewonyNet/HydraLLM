@@ -84,11 +84,14 @@ async def lifespan(app: FastAPI):  # type: ignore
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
 
+    if hasattr(app.state, "session_manager"):
+        app.state.session_manager.close()
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title="HydraLLM",
-        description="Context-Aware HydraLLM",
+        description="[EXPERIMENTAL & RESEARCH ONLY] Context-Aware Smart LLM Gateway. Users are responsible for complying with provider ToS.",
         version="1.0.0",
         lifespan=lifespan,
     )
@@ -96,7 +99,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -111,12 +114,17 @@ def create_app() -> FastAPI:
             content={"detail": exc.errors()},
         )
 
+    from src.services.admin_service import AdminService
+    from src.services.metrics_service import MetricsService
+
     # Initialize components
     analyzer = ContextAnalyzer(max_tokens_fast_model=settings.max_tokens_fast_model)
     key_manager = KeyManager()
     session_manager = SessionManager()
     scraper = WebScraper()
     compressor = ContextCompressor()
+    metrics_service = MetricsService(session_manager)
+    admin_service = AdminService(session_manager)
 
     # Add keys from settings
     if settings.gemini_keys:
@@ -148,6 +156,8 @@ def create_app() -> FastAPI:
     app.state.session_manager = session_manager
     app.state.scraper = scraper
     app.state.gateway = gateway
+    app.state.admin_service = admin_service
+    app.state.metrics_service = metrics_service
 
     # Mount static files
     if os.path.exists(STATIC_DIR):

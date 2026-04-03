@@ -126,6 +126,7 @@ class CerebrasAdapter(ILLMProvider):
             model=cerebras_response.model,
             choices=choices,
             usage=usage,
+            session_id=None,
         )
 
     async def discover_models(self) -> list[dict[str, Any]]:

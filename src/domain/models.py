@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from src.domain.enums import AgentType, ProviderType
+from src.domain.enums import AgentType, PartType, ProviderType
 
 
 class ChatMessage(BaseModel):
@@ -20,6 +20,82 @@ class ChatMessage(BaseModel):
             "example": {"role": "user", "content": "Hello, how are you?"}
         },
     }
+
+
+# ─── Part 데이터 모델 (다형성 5종) ───
+
+
+class TextPartData(BaseModel):
+    """텍스트 파트 데이터."""
+
+    text: str
+
+
+class WebFetchPartData(BaseModel):
+    """웹 스크래핑 결과 파트 데이터."""
+
+    url: str
+    status: str  # "success" | "failed" | "blocked"
+    content: str = ""
+    content_tokens: int = 0
+    fetched_at: str = ""
+
+
+class WebSearchPartData(BaseModel):
+    query: str
+    status: str
+    results_count: int = 0
+    searched_at: str = ""
+
+
+class CompactionPartData(BaseModel):
+    """컴팩션 경계 마커 파트 데이터."""
+
+    auto: bool = True
+    overflow: bool = False
+    summary: str = ""
+    compressed_count: int = 0
+    token_saving: int = 0
+
+
+class StepCostPartData(BaseModel):
+    """요청별 비용/토큰 추적 파트 데이터."""
+
+    provider: str
+    model: str
+    key_index: int = 0
+    tokens: dict[str, int] = {}
+    latency_ms: int = 0
+
+
+class RetryPartData(BaseModel):
+    """재시도 기록 파트 데이터."""
+
+    attempt: int
+    provider: str
+    error: str
+    error_code: int | None = None
+    fallback_to: str | None = None
+
+
+class MessagePart(BaseModel):
+    """DB에서 로드된 파트."""
+
+    id: str  # noqa: A003
+    message_id: str
+    type: PartType  # noqa: A003
+    data: dict[str, Any]
+    created_at: str
+
+
+class SessionMessage(BaseModel):
+    """Part를 포함한 메시지."""
+
+    id: str  # noqa: A003
+    session_id: str
+    role: str
+    parts: list[MessagePart] = []
+    created_at: str
 
 
 class ChatRequest(BaseModel):
@@ -56,6 +132,10 @@ class ChatRequest(BaseModel):
         None, description="List of tools available"
     )
     tool_choice: str | dict[str, Any] | None = Field(None, description="Tool choice")
+    fork_from: str | None = Field(
+        None,
+        description="특정 메시지 ID에서 세션을 분기. 새 세션이 생성되고 응답에 새 session_id 반환.",
+    )
 
     model_config = {
         "extra": "allow",
@@ -95,9 +175,8 @@ class ChatRequest(BaseModel):
                 return True
             if isinstance(content, str):
                 # Check if content contains image URL patterns
-                if (
-                    "image_url" in content
-                    or content.startswith("http")
+                if "image_url" in content or (
+                    content.startswith("http")
                     and any(
                         ext in content.lower()
                         for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]
@@ -135,6 +214,7 @@ class ChatResponse(BaseModel):
     usage: dict[str, Any] | None = Field(
         None, description="Usage statistics and metadata"
     )
+    session_id: str | None = Field(None, description="분기 시 생성된 새 세션 ID")
 
     model_config = {
         "extra": "allow",

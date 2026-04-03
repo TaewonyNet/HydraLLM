@@ -2,106 +2,194 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .enums import ModelType, ProviderType, TierType
-from .models import ChatRequest, ChatResponse, RoutingDecision
+from .models import (
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    RoutingDecision,
+    SessionMessage,
+)
+
+
+class ISessionManager(ABC):
+    @abstractmethod
+    async def create_session(
+        self, session_id: str | None = None, title: str | None = None
+    ) -> str:
+        ...
+
+    @abstractmethod
+    async def save_message(
+        self,
+        session_id: str,
+        role: str,
+        content: Any,
+        parts: list[dict[str, Any]] | None = None,
+    ) -> str:
+        ...
+
+    @abstractmethod
+    async def add_part(
+        self,
+        message_id: str,
+        part_type: str,
+        data: dict[str, Any],
+    ) -> str:
+        ...
+
+    @abstractmethod
+    async def load_context(self, session_id: str) -> list[ChatMessage]:
+        ...
+
+    @abstractmethod
+    async def load_messages_with_parts(self, session_id: str) -> list[SessionMessage]:
+        ...
+
+    @abstractmethod
+    def is_overflow(self, session_id: str) -> bool:
+        ...
+
+    @abstractmethod
+    async def compact(self, session_id: str, compressor: Any) -> None:
+        ...
+
+    @abstractmethod
+    async def fork_session(
+        self,
+        source_session_id: str,
+        fork_point_message_id: str | None = None,
+    ) -> str:
+        ...
+
+    @abstractmethod
+    async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
+        ...
+
+    @abstractmethod
+    async def get_all_sessions(self) -> list[dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    async def clear_session(self, session_id: str) -> None:
+        ...
+
+    @abstractmethod
+    async def get_setting(self, key: str, default: Any = None) -> Any:
+        ...
+
+    @abstractmethod
+    async def set_setting(self, key: str, value: Any) -> None:
+        ...
+
+    @abstractmethod
+    async def log_system_event(
+        self,
+        level: str,
+        category: str,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        ...
+
+    @abstractmethod
+    async def record_usage(
+        self,
+        request_id: str,
+        provider: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        latency_ms: int = 0,
+        status: str = "success",
+        endpoint: str = "chat",
+    ) -> None:
+        ...
+
+    @abstractmethod
+    async def get_usage_summary(self) -> list[dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    async def get_recent_logs(self, limit: int = 50) -> list[dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    async def get_all_provider_health(self) -> list[dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    async def update_daily_usage(
+        self, provider: str, model: str, tokens: int, is_error: bool = False
+    ) -> None:
+        ...
+
+    @abstractmethod
+    async def get_web_cache(self, url: str, ttl_hours: int = 24) -> str | None:
+        ...
+
+    @abstractmethod
+    async def set_web_cache(self, url: str, content: str, mode: str) -> None:
+        ...
+
+    @abstractmethod
+    async def record_scraping(
+        self, url: str, status: str, chars: int, latency: int
+    ) -> None:
+        ...
+
+    @abstractmethod
+    async def get_scraping_summary(self) -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    async def update_provider_health(
+        self,
+        provider: str,
+        status: str,
+        active: int,
+        failed: int,
+        last_error: str | None = None,
+    ) -> None:
+        ...
 
 
 class ILLMProvider(ABC):
-    """
-    Abstract base class for LLM providers.
-    """
-
     @abstractmethod
     async def generate(
         self,
         request: ChatRequest,
         api_key: str,
     ) -> ChatResponse:
-        """
-        Generate a response from the LLM provider.
-
-        Args:
-            request: The chat completion request
-            api_key: The API key to use for this request
-
-        Returns:
-            The generated chat response
-
-        Raises:
-            ProviderError: If the provider returns an error
-        """
         pass
 
     @abstractmethod
     def get_supported_models(self) -> list[ModelType]:
-        """
-        Get the list of supported models for this provider.
-
-        Returns:
-            List of supported model types
-        """
         pass
 
     @abstractmethod
     def is_multimodal(self) -> bool:
-        """
-        Check if this provider supports multimodal inputs.
-
-        Returns:
-            True if the provider supports images, False otherwise
-        """
         pass
 
     @abstractmethod
     def get_max_tokens(self) -> int:
-        """
-        Get the maximum token limit for this provider.
-
-        Returns:
-            Maximum number of tokens supported
-        """
         pass
 
     @abstractmethod
     async def discover_models(self) -> list[dict[str, Any]]:
-        """
-        Discover available models from the provider with metadata.
-
-        Returns:
-            List of model info dictionaries
-        """
         pass
 
     @abstractmethod
     async def probe_key(self, api_key: str) -> dict[str, Any]:
-        """
-        Probe the API key to determine its tier and limits.
-
-        Returns:
-            Dictionary with tier info (e.g., {"tier": "free", "rpm": 15})
-        """
         pass
 
 
 class IContextAnalyzer(ABC):
-    """
-    Interface for context analysis and routing decisions.
-    """
-
     @abstractmethod
     async def analyze(
         self,
         request: ChatRequest,
         available_tiers: dict[ProviderType, set[str]] | None = None,
     ) -> RoutingDecision:
-        """
-        Analyze the request context and determine routing strategy.
-
-        Args:
-            request: The chat completion request
-
-        Returns:
-            RoutingDecision object
-        """
         pass
 
     @abstractmethod
@@ -123,24 +211,10 @@ class IContextAnalyzer(ABC):
 
 
 class IKeyManager(ABC):
-    """
-    Interface for API key management and rotation.
-    """
-
     @abstractmethod
-    async def get_next_key(self, provider: ProviderType, min_tier: TierType = TierType.FREE) -> str:
-        """
-        Get the next available API key for the provider.
-
-        Args:
-            provider: The provider type to get a key for
-
-        Returns:
-            The next available API key
-
-        Raises:
-            ResourceExhaustedError: If no keys are available
-        """
+    async def get_next_key(
+        self, provider: ProviderType, min_tier: TierType = TierType.FREE
+    ) -> str:
         pass
 
     @abstractmethod
@@ -149,13 +223,6 @@ class IKeyManager(ABC):
         provider: ProviderType,
         api_key: str,
     ) -> None:
-        """
-        Report a successful API call for the key.
-
-        Args:
-            provider: The provider type
-            api_key: The API key that succeeded
-        """
         pass
 
     @abstractmethod
@@ -165,56 +232,23 @@ class IKeyManager(ABC):
         api_key: str,
         error: Exception,
     ) -> None:
-        """
-        Report a failed API call for the key.
-
-        Args:
-            provider: The provider type
-            api_key: The API key that failed
-            error: The error that occurred
-        """
         pass
 
     @abstractmethod
     def get_key_status(self) -> dict[ProviderType, dict[str, Any]]:
-        """
-        Get current key status for all providers.
-        """
         pass
 
 
 class IRouter(ABC):
-    """
-    Interface for request routing and orchestration.
-    """
-
     @abstractmethod
     async def route_request(
         self,
         request: ChatRequest,
     ) -> ChatResponse:
-        """
-        Route the request through the appropriate provider.
-
-        Args:
-            request: The chat completion request
-
-        Returns:
-            The generated chat response
-
-        Raises:
-            RoutingError: If routing fails
-        """
         pass
 
     @abstractmethod
     async def get_status(self) -> dict[str, Any]:
-        """
-        Get the current status of all providers.
-
-        Returns:
-            Dictionary with provider status
-        """
         pass
 
     @abstractmethod

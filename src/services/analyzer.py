@@ -1,10 +1,11 @@
 import logging
+import re
 from typing import Any, cast
 
+from src.core.config import settings
 from src.domain.enums import AgentType, ModelType, ProviderType, RoutingReason
 from src.domain.interfaces import IContextAnalyzer
 from src.domain.models import ChatRequest, RoutingDecision
-from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,14 @@ class ContextAnalyzer(IContextAnalyzer):
         self._provider_priority = self._parse_config_list(settings.provider_priority)
 
         self._model_mapping: dict[str, ModelType | str] = {
+            "gemini-3.1-pro": ModelType.GEMINI_3_1_PRO,
+            "gemini-3.0-pro": ModelType.GEMINI_3_PRO,
+            "gemini-3.0-flash": ModelType.GEMINI_3_FLASH,
+            "gemini-2.5-pro": ModelType.GEMINI_2_5_PRO,
             "gemini-2.5-flash": ModelType.GEMINI_2_5_FLASH,
             "gemini-2.0-pro": ModelType.GEMINI_2_0_PRO,
             "gemini-2.0-flash": ModelType.GEMINI_2_0_FLASH,
             "gemini-2.0-thinking": ModelType.GEMINI_2_0_THINKING,
-            "gemini-1.5-pro": ModelType.GEMINI_1_5_PRO,
-            "gemini-1.5-flash": ModelType.GEMINI_1_5_FLASH,
             "gemini-pro": ModelType.GEMINI_PRO,
             "gemini-flash": ModelType.GEMINI_FLASH,
             "gemini-pro-vision": ModelType.GEMINI_PRO_VISION,
@@ -49,10 +52,13 @@ class ContextAnalyzer(IContextAnalyzer):
             "mllm/auto": "auto",
             "opencode": ModelType.OPENCODE_MODEL,
             "openclaw": ModelType.OPENCLAW_MODEL,
-            "gpt-3.5-turbo": ModelType.GEMINI_1_5_FLASH,
-            "gpt-4": ModelType.GEMINI_1_5_PRO,
-            "gpt-4o": ModelType.GEMINI_1_5_PRO,
-            "gpt-4o-mini": ModelType.GEMINI_1_5_FLASH,
+            "gpt-3.5-turbo": ModelType.GEMINI_2_5_FLASH,
+            "gpt-4": ModelType.GEMINI_3_PRO,
+            "gpt-4o": ModelType.GEMINI_3_PRO,
+            "gpt-4o-mini": ModelType.GEMINI_2_5_FLASH,
+            "claude-3-opus": ModelType.GEMINI_3_PRO,
+            "claude-3-sonnet": ModelType.GEMINI_3_PRO,
+            "claude-3-haiku": ModelType.GEMINI_2_5_FLASH,
         }
 
         self._provider_limits = {
@@ -87,17 +93,18 @@ class ContextAnalyzer(IContextAnalyzer):
     ) -> RoutingDecision:
         model_hint = request.model.lower() if request.model else "auto"
 
-        if model_hint == "mllm/auto":
+        if model_hint in ["mllm/auto", "auto"]:
             model_hint = "auto"
 
         preferred_provider = None
-        if model_hint.endswith("/auto"):
-            provider_str = model_hint.split("/")[0]
-            model_hint = "auto"
-            try:
-                preferred_provider = ProviderType(provider_str)
-            except ValueError:
-                pass
+        if "/" in model_hint:
+            parts = model_hint.split("/")
+            if parts[1] == "auto":
+                try:
+                    preferred_provider = ProviderType(parts[0])
+                    model_hint = "auto"
+                except ValueError:
+                    pass
 
         if model_hint == "opencode":
             model_list = self.get_supported_models_info()
@@ -164,8 +171,6 @@ class ContextAnalyzer(IContextAnalyzer):
             return False
 
         content_lower = content_text.lower()
-
-        import re
 
         if re.search(r"https?://[^\s/$.?#].[^\sㄱ-ㅎㅏ-ㅣ가-힣]*", content_text):
             return True
@@ -311,14 +316,13 @@ class ContextAnalyzer(IContextAnalyzer):
                 "reason": RoutingReason.TOKEN_COUNT.value,
             }
         else:
-            if "gemini" in self._provider_priority:
-                has_gemini = available_tiers and available_tiers.get(
-                    ProviderType.GEMINI
-                )
+            if available_tiers is not None and "gemini" in self._provider_priority:
+                has_gemini = available_tiers.get(ProviderType.GEMINI)
                 if has_gemini:
                     has_premium_gemini = "premium" in available_tiers.get(
                         ProviderType.GEMINI, set()
                     )
+
                     target_model = (
                         self._default_premium_model
                         if has_premium_gemini
@@ -357,20 +361,30 @@ class ContextAnalyzer(IContextAnalyzer):
     def _get_default_model_for_provider(self, provider: ProviderType) -> str:
         if provider == ProviderType.GEMINI:
             return self._default_free_model
-        if provider == ProviderType.GROQ:
+        elif provider == ProviderType.GROQ:
             return ModelType.GROQ_LLAMA_3_3_70B.value
-        if provider == ProviderType.CEREBRAS:
+        else:
             return ModelType.CEREBRAS_LLAMA.value
-        return "auto"
 
     def _get_target_for_model(self, model: ModelType | str) -> ProviderType | AgentType:
+        if hasattr(self, "_dynamic_targets"):
+            model_id = model.value if hasattr(model, "value") else str(model)
+            clean_id = model_id.replace("models/", "")
+
+            if clean_id in self._dynamic_targets:
+                return self._dynamic_targets[clean_id]
+            if model_id in self._dynamic_targets:
+                return self._dynamic_targets[model_id]
+
         model_to_target: dict[ModelType, ProviderType | AgentType] = {
+            ModelType.GEMINI_3_1_PRO: ProviderType.GEMINI,
+            ModelType.GEMINI_3_PRO: ProviderType.GEMINI,
+            ModelType.GEMINI_3_FLASH: ProviderType.GEMINI,
+            ModelType.GEMINI_2_5_PRO: ProviderType.GEMINI,
             ModelType.GEMINI_2_5_FLASH: ProviderType.GEMINI,
             ModelType.GEMINI_2_0_PRO: ProviderType.GEMINI,
             ModelType.GEMINI_2_0_FLASH: ProviderType.GEMINI,
             ModelType.GEMINI_2_0_THINKING: ProviderType.GEMINI,
-            ModelType.GEMINI_1_5_PRO: ProviderType.GEMINI,
-            ModelType.GEMINI_1_5_FLASH: ProviderType.GEMINI,
             ModelType.GEMINI_PRO: ProviderType.GEMINI,
             ModelType.GEMINI_PRO_VISION: ProviderType.GEMINI,
             ModelType.GEMINI_FLASH: ProviderType.GEMINI,

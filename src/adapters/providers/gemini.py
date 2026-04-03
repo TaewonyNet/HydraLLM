@@ -16,16 +16,17 @@ logger = get_logger(__name__)
 class GeminiAdapter(ILLMProvider):
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
+        self._discovered_models: list[dict[str, Any]] = []
         logger.info("GeminiAdapter initialized")
 
     def get_supported_models(self) -> list[ModelType]:
         return [
+            ModelType.GEMINI_3_PRO,
+            ModelType.GEMINI_3_FLASH,
+            ModelType.GEMINI_2_5_PRO,
             ModelType.GEMINI_2_5_FLASH,
             ModelType.GEMINI_2_0_PRO,
             ModelType.GEMINI_2_0_FLASH,
-            ModelType.GEMINI_2_0_THINKING,
-            ModelType.GEMINI_1_5_PRO,
-            ModelType.GEMINI_1_5_FLASH,
         ]
 
     def is_multimodal(self) -> bool:
@@ -37,6 +38,9 @@ class GeminiAdapter(ILLMProvider):
     async def generate(self, request: ChatRequest, api_key: str) -> ChatResponse:
         try:
             genai.configure(api_key=api_key)
+
+            if not self._discovered_models:
+                await self.discover_models()
 
             if not request.messages:
                 error_msg = "No messages provided in request"
@@ -58,18 +62,7 @@ class GeminiAdapter(ILLMProvider):
 
             contents = self._convert_to_gemini_request(history)
 
-            logger.debug(f"Gemini Request Contents (turns: {len(contents)})")
-            if system_instruction:
-                logger.debug(
-                    f"Gemini System Instruction length: {len(system_instruction)}"
-                )
-
             logger.info(f"Sending request to Gemini with model {model_name}")
-
-            if settings.debug:
-                logger.debug(
-                    f"GEMINI ADAPTER REQUEST: {request.model_dump_json(indent=2)}"
-                )
 
             tools = None
             if request.has_search:
@@ -109,23 +102,31 @@ class GeminiAdapter(ILLMProvider):
                 raise ServiceUnavailableError(err_msg) from e
 
     def _map_model_name(self, request_model: str | None) -> str:
-        mapping = {
-            "gemini-2.5-flash": "gemini-2.5-flash",
-            "gemini-2.0-pro": "gemini-2.0-pro-exp",
-            "gemini-2.0-flash": "gemini-2.0-flash",
-            "gemini-2.0-thinking": "gemini-2.0-flash-thinking-exp",
-            "gemini-1.5-pro": "gemini-pro-latest",
-            "gemini-1.5-flash": "gemini-flash-latest",
-            "gemini-pro": "gemini-pro-latest",
-            "gemini-flash": "gemini-flash-latest",
-            "gemini-last-flash": "gemini-flash-latest",
-        }
+        if not request_model or request_model.lower() == "auto":
+            # 가용한 모델 중 가장 최신 버전 자동 선택
+            flash_models = [
+                m["id"] for m in self._discovered_models if "flash" in m["id"].lower()
+            ]
+            if flash_models:
+                return sorted(flash_models, reverse=True)[0]
+            return "gemini-2.5-flash"
 
-        if not request_model:
-            return "gemini-flash-latest"
+        # 입력값 정제 (접두사 제거 후 매칭 시도)
+        input_clean = request_model.lower().replace("models/", "")
 
-        if request_model in mapping:
-            return mapping[request_model]
+        # 1. 정확한 ID 매칭
+        for m in self._discovered_models:
+            m_id_clean = m["id"].lower().replace("models/", "")
+            if input_clean == m_id_clean:
+                return m["id"]
+
+        # 2. 이름 기반 부분 매칭
+        for m in self._discovered_models:
+            if (
+                input_clean in m["id"].lower()
+                or input_clean in m.get("display_name", "").lower()
+            ):
+                return m["id"]
 
         return request_model
 
@@ -216,9 +217,21 @@ class GeminiAdapter(ILLMProvider):
         )
 
         usage = {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
+            "prompt_tokens": getattr(
+                gemini_response.usage_metadata, "prompt_token_count", 0
+            )
+            if hasattr(gemini_response, "usage_metadata")
+            else 0,
+            "completion_tokens": getattr(
+                gemini_response.usage_metadata, "candidates_token_count", 0
+            )
+            if hasattr(gemini_response, "usage_metadata")
+            else 0,
+            "total_tokens": getattr(
+                gemini_response.usage_metadata, "total_token_count", 0
+            )
+            if hasattr(gemini_response, "usage_metadata")
+            else 0,
         }
 
         if grounding_metadata:
@@ -231,6 +244,7 @@ class GeminiAdapter(ILLMProvider):
             model=model_name,
             choices=choices,
             usage=usage,
+            session_id=None,
         )
 
     async def discover_models(self) -> list[dict[str, Any]]:
@@ -239,25 +253,18 @@ class GeminiAdapter(ILLMProvider):
             for m in genai.list_models():
                 if "generateContent" in m.supported_generation_methods:
                     name = m.name.replace("models/", "")
-                    if "lite" in name or "flash" in name:
-                        tier = "free"
-                    elif "pro" in name or "ultra" in name:
-                        tier = "premium"
-                    elif "exp" in name or "preview" in name:
-                        tier = "experimental"
-                    else:
-                        tier = "standard"
-
-                    models.append(
-                        {
-                            "id": name,
-                            "display_name": m.display_name,
-                            "description": m.description,
-                            "input_token_limit": m.input_token_limit,
-                            "output_token_limit": m.output_token_limit,
-                            "tier": tier,
-                        }
-                    )
+                    m_info = {
+                        "id": name,
+                        "display_name": m.display_name,
+                        "description": m.description,
+                        "input_token_limit": m.input_token_limit,
+                        "output_token_limit": m.output_token_limit,
+                        "tier": "free"
+                        if "flash" in name or "lite" in name
+                        else "premium",
+                    }
+                    models.append(m_info)
+            self._discovered_models = models
             return models
         except Exception as e:
             logger.error(f"Failed to discover Gemini models: {e}")
@@ -266,7 +273,7 @@ class GeminiAdapter(ILLMProvider):
     async def probe_key(self, api_key: str) -> dict[str, Any]:
         try:
             genai.configure(api_key=api_key)
-            test_model_name = "gemini-3.1-pro-preview"
+            test_model_name = "gemini-2.5-flash"
             try:
                 model = genai.GenerativeModel(test_model_name)
                 await model.generate_content_async(
@@ -280,11 +287,14 @@ class GeminiAdapter(ILLMProvider):
                 elif "429" in err_msg:
                     logger.warning(f"Key {api_key[:8]}... is still exhausted (429)")
                     raise
+                else:
+                    tier = "free"
 
             return {
                 "tier": tier,
+                "status": "active",
                 "can_list_models": True,
             }
         except Exception as e:
             logger.error(f"Probe failed for Gemini key {api_key[:8]}: {e}")
-            return {"tier": "error", "error": str(e)}
+            return {"tier": "error", "status": "failed", "error": str(e)}
