@@ -1,97 +1,147 @@
-# 🚀 HydraLLM: 최소한의 토큰으로 최대의 지능을 (Efficient Context Orchestrator)
+# HydraLLM: 지능형 오케스트레이터
 
-**HydraLLM**은 **"어떻게 하면 토큰을 덜 쓰면서도 훌륭한 LLM을 최적으로 활용할 수 있을까?"**라는 질문에 답하기 위해 설계된 고성능 리소스 오케스트레이터입니다. 본 프로젝트는 여러 LLM 제공자(Gemini, Groq, Cerebras)를 통합 관리하며, 지능형 컨텍스트 압축 및 라우팅 기술을 통해 자원 효율성을 극대화합니다.
+> 본 문서가 한국어 공식 문서입니다. 영문판([README.md](README.md))은 참고용으로 유지됩니다.
 
+**HydraLLM**은 여러 LLM 리소스를 효율적으로 활용하도록 설계된 컨텍스트 인지 게이트웨이입니다. Gemini / Groq / Cerebras 전반에 걸쳐 요청을 라우팅하며, 공급자별 회로 차단기, 랜덤 키 로테이션(쿼터 인지 쿨다운 포함), 실시간 웹 보강 기능을 제공하고, OpenAI 호환 API를 엄격한 Clean Architecture(Domain 다음 Services 다음 Adapters 다음 API) 위에서 구성합니다.
 
----
+- **버전**: `1.3.0` (`pyproject.toml`)
+- **Python**: `3.10+`
+- **실행 진입점**: `python main.py`
+- **통합 UI**: `http://localhost:8000/ui`
+- **OpenAI 호환 엔드포인트**: `POST /v1/chat/completions`
 
-## ✨ 핵심 기능
+## 프로젝트 구조
 
-- **동적 리소스 오케스트레이션**:
-  - 다수의 API 엔드포인트에 워크로드를 분산하여 자원 활용도를 최적화합니다.
-  - **티어 인지형 장애 조치(Failover)**: 리소스 제한을 실시간으로 감지하여 가용한 티어로 트래픽을 자동으로 재라우팅합니다.
-  - **자동 가용성 회복**: 백그라운드 모니터링을 통해 자원 상태를 주기적으로 확인하고 서비스 연속성을 유지합니다.
-- **지능형 컨텍스트 라우팅**:
-  - 입력 컨텍스트의 길이, 멀티모달 필요성 및 작업 메타데이터를 분석하여 가장 적합한 모델을 자동 선택합니다.
-  - **적응형 모델 선택**: 품질과 비용 효율성을 극대화하기 위해 고속 모델과 대용량 모델 간을 지능적으로 전환합니다.
-- **안정적인 정보 추출 및 강화**:
-  - 헤드리스 렌더링 기반의 콘텐츠 파싱 엔진을 통해 풍부한 컨텍스트 강화를 지원합니다.
-  - 표준 보안 프로토콜(SSRF 방지)을 준수하며 정교한 요청 오케스트레이션을 수행합니다.
-  - 사용자 프롬프트에 실시간 데이터를 결합하여 답변의 정확도를 높입니다.
-- **고도화된 컨텍스트 관리**:
-  - **프롬프트 최적화**: 추출된 방대한 데이터를 지능적으로 요약 및 최적화하여 모델의 이해도와 토큰 효율성을 개선합니다.
-  - **컨텍스트 압축**: 특화된 알고리즘(예: LLMLingua)을 활용하여 긴 대화의 핵심 맥락을 효과적으로 보존합니다.
-- **안전한 로컬 지속성**:
-  - **SQLite (WAL 모드)** 기반의 견고한 로컬 저장소를 제공하며, 메시지 단위 관리 및 오버플로 방지 기능을 포함합니다.
-- **표준 인터페이스 준수**:
-  - OpenAI API 표준(`/v1/chat/completions`, `/v1/models`)을 엄격히 준수하여 기존 에이전트 및 프레임워크와 원활하게 연동됩니다.
-
----
-
-## 🕹️ 인터랙티브 대시보드
-
-내장된 관리 콘솔을 통해 오케스트레이터의 상태를 모니터링하고 테스트할 수 있습니다.
-- **접속 주소**: `http://localhost:8000/ui`
-- **주요 기능**: 모델 직접 대화, 실시간 리소스 상태 모니터링 및 세션 관리.
-
----
-
-## 🏗 아키텍처 및 디자인
-
-확장성과 유지보수성을 위해 **Clean Architecture** 원칙을 따릅니다.
-- **서비스 계층**: 라우팅, 리소스 생애주기 관리 및 정보 오케스트레이션 핵심 로직 담당.
-- **어댑터 계층**: 다양한 클라우드 제공자 및 로컬 엔진을 위한 표준화된 커넥터 제공.
-- **영속성 계층**: 대화 상태의 안정적인 저장을 관리.
-
----
-
-## 🛠 빠른 시작
-
-### 1. 설치
-
-```bash
-# 저장소 클론
-git clone https://github.com/TaewonyNet/HydraLLM.git
-cd HydraLLM
-
-# 패키지 및 의존성 설치 (LLMLingua 포함)
-pip install -e .
-
-# Playwright 브라우저 바이너리 설치
-playwright install chromium
+```text
+.
+├── main.py                       # Uvicorn 실행 진입점 (--debug, --port 지원)
+├── src/
+│   ├── app.py                    # FastAPI 팩토리, lifespan, 정적 UI 마운트
+│   ├── adapters/providers/       # gemini, openai_compat (Groq/Ollama), cerebras, local_cli
+│   ├── api/v1/                   # endpoints.py, dependencies.py
+│   ├── core/                     # config, container, exceptions, logging
+│   ├── domain/                   # enums, interfaces, schemas, models
+│   ├── services/                 # analyzer, gateway, key_manager, session_manager,
+│   │                             # scraper, compressor, web_context_service,
+│   │                             # admin_service, metrics_service, observability,
+│   │                             # session_orchestrator, context_manager
+│   └── utils/                    # ulid 헬퍼
+├── tests/
+│   ├── unit/                     # analyzer, key_manager, adapters, ulid, stability
+│   ├── integration/              # gateway failover, auto-models, provider validation
+│   └── api/                      # FastAPI endpoint contract 테스트
+├── static/                       # 통합 SPA (Playground + Dashboard)
+├── samples/                      # 요청 바디 샘플
+├── scripts/                      # analyze_logs.py, check_imports.py, run_final_test.py
+├── examples/                     # cURL / SDK 사용 예시
+├── pyproject.toml                # Poetry, ruff, mypy, pytest 설정
+└── .env                          # 공급자 키와 런타임 설정 (gitignore 처리됨)
 ```
 
-### 2. 설정 (`.env`)
+## 핵심 기능
 
-```env
-PORT=8000
-LOG_LEVEL=INFO
-DEBUG=false
+1. **지능형 라우팅** — `services/analyzer.py::ContextAnalyzer`가 토큰 수, 멀티모달 여부, 탐지된 웹 의도, 명시적 모델 힌트(`provider/model`), 사용 가능한 키 티어를 기반으로 공급자와 모델을 선택합니다.
+2. **회로 차단기와 클라우드 페일오버** — `services/gateway.py`가 모든 공급자 호출을 `CircuitBreaker`(실패 5회 임계값, 60초 복구)로 감싸며, `PROVIDER_PRIORITY` 체인(Gemini → Groq → Cerebras)을 따라 재시도합니다.
+3. **최종 로컬 폴백** — 모든 클라우드 공급자가 소진되면 Gateway가 `OpenAICompatAdapter`로 `OLLAMA_BASE_URL`의 Ollama에 라우팅합니다.
+4. **쿨다운 기반 키 로테이션** — `services/key_manager.py::KeyManager`가 공급자별 풀을 유지하며, 활성 키 집합에서 랜덤하게 선택하고, 쿼터(1시간) 또는 거부/403(24시간) 오류에 대해 더 긴 쿨다운을 적용합니다.
+5. **웹 보강** — `services/web_context_service.py`와 `services/scraper.py::WebScraper`(Playwright + Scrapling)가 명시적 URL을 가져오거나 웹 의도 감지 시 스크래핑을 수행하며, 24시간 SQLite 캐시를 사용합니다.
+6. **컨텍스트 압축** — `services/compressor.py::ContextCompressor`가 LLMLingua-2(선택적 `compression` extra)를 사용해 긴 히스토리를 축소합니다.
+7. **세션 영속화** — `services/session_manager.py::SessionManager`가 SQLite(WAL)에 메시지와 파트를 저장하고, 포킹 및 compaction 임계값을 지원하며, 런타임 설정을 보관합니다.
+8. **통합 관리 UI** — `/ui`에서 playground, dashboard, 키 상태, 모델 카탈로그를 하나의 SPA로 제공하며, 모든 fetch 호출은 프록시 안정성을 위해 절대 URL을 사용합니다.
+9. **OpenAI API 호환** — 스트리밍 SSE(`chat.completion.chunk` + `[DONE]`) 포함 `/v1/chat/completions`.
 
-# 제공자별 키 (쉼표로 구분)
-GEMINI_KEYS=key1,key2
-GROQ_KEYS=gsk_1,gsk_2
-```
+## API 표면
 
-### 3. 실행
+모든 엔드포인트는 `src/api/v1/endpoints.py`를 통해 `/v1`에 마운트됩니다.
+
+| 메서드 | 경로 | 목적 |
+|--------|------|------|
+| `POST` | `/v1/chat/completions` | 기본 채팅 진입점 (스트리밍 지원) |
+| `GET`  | `/v1/models` | 발견된 모든 모델 목록 |
+| `GET`  | `/v1/admin/sessions` | 영속화된 세션 목록 |
+| `POST` | `/v1/admin/sessions/new` | 새 세션 생성 |
+| `DELETE` | `/v1/admin/sessions/{session_id}` | 세션 삭제 |
+| `GET`  | `/v1/admin/logs?limit=50` | 최근 시스템 로그 |
+| `GET`  | `/v1/admin/stats` | 집계된 사용량과 헬스 통계 |
+| `GET`  | `/v1/admin/dashboard` | UI용 통계와 최근 로그 |
+| `GET`  | `/v1/admin/status` | 실시간 공급자/에이전트 상태 |
+| `POST` | `/v1/admin/refresh-models` | 공급자 모델 디스커버리 재실행 |
+| `POST` | `/v1/admin/probe` | 모든 키 헬스 프로브 |
+| `POST` | `/v1/admin/keys` | 런타임 키 추가 (알려진 문제 참고) |
+| `GET`  | `/v1/admin/onboarding` | 온보딩 상태와 사용 가능 모델 |
+| `POST` | `/v1/admin/onboarding` | 온보딩 선택 저장 |
+
+루트 및 UI 경로:
+
+| 메서드 | 경로 | 목적 |
+|--------|------|------|
+| `GET` | `/` | 서비스 배너 (`/docs`, `/openapi.json`, `/ui` 링크 제공) |
+| `GET` | `/ui` | 통합 관리 SPA (`static/index.html`) |
+| `GET` | `/ui/static/*` | 정적 자산 |
+
+## 명령어
 
 ```bash
+# 서버 실행 (기본 포트 8000)
 python main.py
+python main.py --debug --port 8001
+
+# 테스트
+pytest                    # 전체 스위트
+pytest -m unit            # 단위 테스트만
+pytest -m integration     # 통합 테스트만
+pytest tests/unit/test_analyzer.py::test_auto_routing   # 특정 테스트
+
+# 코드 품질
+ruff check .
+ruff check --fix .
+mypy src/
 ```
 
+## 설정
+
+설정은 `pydantic-settings`를 통해 `.env`에서 로드됩니다(`src/core/config.py::Settings`).
+주요 변수:
+
+- **키(쉼표로 구분된 풀)** — `GEMINI_KEYS`, `GROQ_KEYS`, `CEREBRAS_KEYS`
+- **우선순위** — `PROVIDER_PRIORITY=gemini,groq,cerebras,ollama,opencode,openclaw`
+- **라우팅 기본값** — `DEFAULT_FREE_MODEL`, `DEFAULT_PREMIUM_MODEL`, `MAX_TOKENS_FAST_MODEL`
+- **로컬 에이전트** — `OLLAMA_BASE_URL`, `OPENCODE_BASE_URL`, `OPENCLAW_BASE_URL`
+- **기능 플래그** — `ENABLE_CONTEXT_COMPRESSION`, `ENABLE_AUTO_WEB_FETCH`, `WEB_CACHE_TTL_HOURS`
+- **관리자** — `ADMIN_API_KEY` (선택; 미설정 시 관리자 인증 비활성화)
+
+전체 예시는 `.env.example`을 참고하세요. `.env`는 `.gitignore`에 포함되어 저장소에 커밋되지 않습니다.
+
+## 알려진 이슈 (2026-04-15 검증)
+
+다음 항목은 본 문서 업데이트 시점에 의도적으로 추적만 유지하고 있는 상태입니다. 상세 실행 내역은 `TROUBLESHOOTING.ko.md` 열한 번째 이하 섹션을 참고하세요.
+
+### 테스트 결과 요약
+
+- **unit + api 테스트**: 63개 모두 통과
+- **integration 테스트(빠른 하위집합, `test_integration.py` 외)**: 6 통과, 1 실패
+  - 실패: `tests/integration/test_integration.py::TestIntegration::test_admin_keys_endpoint` — `POST /v1/admin/keys`가 JSON 바디만으로 호출되면 `422`를 반환합니다. 엔드포인트 시그니처(`provider: str, keys: list[str] = Body(...)`)가 `provider`를 쿼리 파라미터로 해석하기 때문입니다.
+- **네트워크 의존 통합 테스트(`test_auto_models.py`, `test_auto_models_functionality.py`)**: 실제 Gemini/Groq/Cerebras/Ollama 호출을 수행하므로 실행 시간이 길고 외부 쿼터에 따라 결과가 달라집니다. `test_auto_models_functionality`는 최종 로컬 폴백이 Ollama의 첫 번째 모델을 선택할 때 임베딩 전용 모델(`bge-m3:latest` 등)이 선택되면 Ollama가 `400 does not support chat`로 거절하여 실패할 수 있습니다.
+
+### mypy 경고 (`mypy src/` — 약 35건, 10개 파일)
+
+- `services/admin_service.py:48` — `AdminService.delete_session`이 `session_manager.delete_session`을 호출하지만 `SessionManager`에는 해당 메서드가 없습니다. `DELETE /v1/admin/sessions/{id}` 호출 시 런타임 `AttributeError`가 발생할 가능성이 있습니다. `ISessionManager`에는 `clear_session` 및 `fork_session`만 정의되어 있습니다.
+- `services/analyzer.py:104`, `adapters/providers/gemini.py:81` — Pydantic v2 mypy 플러그인 미설정으로 `RoutingDecision` / `ChatMessage`에 대한 "missing named argument" 허위 경고가 발생합니다. 런타임에는 필드에 기본값이 있습니다.
+- `services/gateway.py:211,214` — `all_parts` 원소의 `dict | BaseModel` 타입 내로잉과 `msg.model_extra` 할당이 현재 타이핑에서 유지되지 않습니다.
+- `services/key_manager.py:117` — `cooldown_seconds`가 한쪽 분기에서는 `int`, 다른 쪽에서는 `timedelta.total_seconds()`(float)로 할당되어 타입이 흔들립니다.
+- `services/scraper.py:13-15` — `ProxySpec`이 타이핑 별칭으로 import된 후 동일 이름의 클래스로 재정의되었습니다.
+- `services/context_manager.py`, `services/session_manager.py`, `api/v1/endpoints.py`, `app.py` — 일부 함수에 반환 어노테이션이 누락되어 있습니다.
+
+### ruff 린트 경고 (`ruff check .` — 약 54건, 런타임 차단 없음)
+
+- `B904` 14건 `api/v1/endpoints.py` — `except` 블록 내 `raise HTTPException(...)`에서 `raise ... from err` 누락.
+- `F403` `src/domain/{enums,interfaces,schemas}/__init__.py` — 와일드카드 재export.
+- `E402` 일부 테스트 파일 — `tests/AGENTS.md` 규약에 따라 `sys.path` 조작 이후에 `src`에서 import.
+- `EM101/EM102` `gemini.py`, `gateway.py`, `F841` 미사용 `last_exception`, `F401` 미사용 `re` import.
+
+### 버전 드리프트
+
+- `pyproject.toml`은 `1.3.0`으로 선언되어 있으나 `src/app.py`의 `create_app`이 여전히 `FastAPI(version="1.0.0")`을 생성하여 OpenAPI 스펙에는 구 버전이 노출됩니다.
+
 ---
-
-## 📄 라이선스 및 면책 조항
-
-본 프로젝트는 **MIT License**에 따라 배포됩니다.
-
-### ⚠️ 중요: 실험 및 연구 목적 전용 (Disclaimer)
-
-**HydraLLM**은 **교육 및 연구 목적**으로만 제공됩니다. 이 시스템은 API 통합, 동적 리소스 관리 및 컨텍스트 강화 개념을 연구하기 위해 설계되었습니다.
-
-- **사용자 책임**: 이 시스템에 통합된 제3자 제공자의 서비스 약관(ToS) 및 운영 정책을 준수할 책임은 전적으로 사용자에게 있습니다. 
-- **공정 이용**: 본 소프트웨어는 연동되는 서비스의 윤리적 가이드라인과 법적 프레임워크를 준수하는 범위 내에서 사용되어야 합니다.
-- **보증 없음**: 소프트웨어는 "있는 그대로(As-Is)" 제공되며, 저자는 본 도구의 사용으로 인해 발생하는 어떠한 서비스 중단이나 계정 조치에 대해서도 책임을 지지 않습니다.
-
-### ⚖️ 상표권 안내
-모든 상표 및 서비스 마크는 해당 소유자의 자산입니다. 본 프로젝트에서의 사용이 해당 회사와의 제휴나 보증을 의미하지 않습니다.
+*마지막 업데이트: 2026-04-15*

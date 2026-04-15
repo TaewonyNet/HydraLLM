@@ -3,20 +3,21 @@ from typing import Any
 
 import google.generativeai as genai
 
-from src.core.config import settings
 from src.core.exceptions import RateLimitError, ServiceUnavailableError
 from src.core.logging import get_logger
 from src.domain.enums import ModelType
 from src.domain.interfaces import ILLMProvider
 from src.domain.models import ChatMessage, ChatMessageChoice, ChatRequest, ChatResponse
+from src.services.context_manager import ContextManager
 
 logger = get_logger(__name__)
 
 
 class GeminiAdapter(ILLMProvider):
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, context_manager: ContextManager | None = None):
         genai.configure(api_key=api_key)
         self._discovered_models: list[dict[str, Any]] = []
+        self.context_manager = context_manager
         logger.info("GeminiAdapter initialized")
 
     def get_supported_models(self) -> list[ModelType]:
@@ -36,6 +37,7 @@ class GeminiAdapter(ILLMProvider):
         return 32768
 
     async def generate(self, request: ChatRequest, api_key: str) -> ChatResponse:
+        uploaded_files = []
         try:
             genai.configure(api_key=api_key)
 
@@ -43,40 +45,68 @@ class GeminiAdapter(ILLMProvider):
                 await self.discover_models()
 
             if not request.messages:
-                error_msg = "No messages provided in request"
-                raise ServiceUnavailableError(error_msg)
+                raise ServiceUnavailableError("No messages provided in request")
 
             model_name = self._map_model_name(request.model)
 
-            system_instruction = None
+            system_instructions = []
             history = []
+
             for msg in request.messages:
                 if msg.role == "system":
-                    system_instruction = str(msg.content)
-                else:
-                    history.append(msg)
+                    system_instructions.append(str(msg.content))
+                    continue
 
-            model = genai.GenerativeModel(
-                model_name, system_instruction=system_instruction
+                content_str = str(msg.content)
+                if self.context_manager and self.context_manager.should_offload(
+                    content_str
+                ):
+                    try:
+                        content_hash = self.context_manager.get_content_hash(
+                            content_str
+                        )
+                        file_handle = self.context_manager.get_cached_file(content_hash)
+
+                        if not file_handle:
+                            tmp_path = self.context_manager.prepare_temp_file(
+                                content_str
+                            )
+                            file_handle = genai.upload_file(
+                                path=tmp_path,
+                                display_name=f"ctx_{content_hash[:8]}.txt",
+                            )
+                            self.context_manager.cache_file(content_hash, file_handle)
+
+                        history.append(
+                            ChatMessage(
+                                role=msg.role,
+                                content=[{"type": "file", "file_handle": file_handle}],
+                            )
+                        )
+                        continue
+                    except Exception as fe:
+                        logger.warning(
+                            f"Failed to upload context file: {fe}. Falling back to text."
+                        )
+
+                history.append(msg)
+
+            combined_system = (
+                "\n\n".join(system_instructions) if system_instructions else None
             )
-
+            model = genai.GenerativeModel(
+                model_name, system_instruction=combined_system
+            )
             contents = self._convert_to_gemini_request(history)
 
-            logger.info(f"Sending request to Gemini with model {model_name}")
+            logger.info(
+                f"Sending request to Gemini with model {model_name} (Files: {len(uploaded_files)})"
+            )
 
             tools = None
             if request.has_search:
-                tools = [
-                    {
-                        "google_search_retrieval": {
-                            "dynamic_retrieval_config": {
-                                "mode": "DYNAMIC",
-                                "dynamic_threshold": 0.3,
-                            }
-                        }
-                    }
-                ]
-                logger.info(f"Enabling Google Search grounding for model {model_name}")
+                # Using standard 'google_search' tool name for native search retrieval
+                tools = [{"google_search": {}}]
 
             response = await model.generate_content_async(
                 contents=contents,
@@ -90,16 +120,14 @@ class GeminiAdapter(ILLMProvider):
                 ),
             )
 
-            logger.info(f"Gemini request succeeded for model {model_name}")
             return self._convert_to_chat_response(response, model_name)
         except Exception as e:
             logger.error(f"Gemini request failed: {str(e)}")
             if "429" in str(e):
-                err_msg = f"Rate limit exceeded: {str(e)}"
-                raise RateLimitError(err_msg) from e
-            else:
-                err_msg = f"Unexpected error: {str(e)}"
-                raise ServiceUnavailableError(err_msg) from e
+                raise RateLimitError(f"Rate limit exceeded: {str(e)}") from e
+            raise ServiceUnavailableError(f"Unexpected error: {str(e)}") from e
+        finally:
+            pass
 
     def _map_model_name(self, request_model: str | None) -> str:
         if not request_model or request_model.lower() == "auto":
@@ -135,16 +163,21 @@ class GeminiAdapter(ILLMProvider):
         for msg in messages:
             role = "user" if msg.role == "user" else "model"
             content = msg.content
+            parts = []
 
             if isinstance(content, str):
-                parts = [content]
+                parts.append(content)
             elif isinstance(content, dict):
                 if content.get("type") == "text":
-                    parts = [content.get("text", "")]
+                    parts.append(content.get("text", ""))
                 else:
-                    parts = [str(content)]
+                    parts.append(str(content))
             else:
-                parts = [str(p) for p in content]
+                for p in content:
+                    if isinstance(p, dict) and p.get("type") == "file":
+                        parts.append(p.get("file_handle"))
+                    else:
+                        parts.append(str(p))
 
             gemini_msgs.append({"role": role, "parts": parts})
         return gemini_msgs
@@ -164,19 +197,28 @@ class GeminiAdapter(ILLMProvider):
                 else None
             )
 
-            if hasattr(gemini_response, "text") and gemini_response.text:
-                response_content = gemini_response.text
-            elif candidate:
-                if hasattr(candidate, "content") and hasattr(
-                    candidate.content, "parts"
-                ):
-                    parts = [
-                        p.text for p in candidate.content.parts if hasattr(p, "text")
-                    ]
-                    if parts:
-                        response_content = "".join(parts)
+            if (
+                candidate
+                and hasattr(candidate, "content")
+                and hasattr(candidate.content, "parts")
+            ):
+                parts = [
+                    p.text
+                    for p in candidate.content.parts
+                    if hasattr(p, "text") and p.text
+                ]
+                if parts:
+                    response_content = "".join(parts)
+                else:
+                    if hasattr(candidate, "finish_reason"):
+                        fr = candidate.finish_reason
+                        fr_val = fr.value if hasattr(fr, "value") else fr
+                        if fr_val in [3, 4, 12]:
+                            response_content = f"[Request blocked by safety filters (Reason: {fr_val})]"
+                        else:
+                            response_content = "[Empty response from model]"
             else:
-                response_content = "[No candidates returned]"
+                response_content = "[No valid response parts returned]"
 
             if candidate:
                 if hasattr(candidate, "finish_reason") and candidate.finish_reason:

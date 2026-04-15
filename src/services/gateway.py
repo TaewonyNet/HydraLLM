@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import time
-import uuid
+import traceback
 from typing import Any, cast
 
+from src.adapters.providers.cerebras import CerebrasAdapter
 from src.adapters.providers.gemini import GeminiAdapter
 from src.adapters.providers.local_cli import LocalCLIAdapter
 from src.adapters.providers.openai_compat import OpenAICompatAdapter
@@ -14,13 +15,13 @@ from src.domain.interfaces import ILLMProvider, IRouter, ISessionManager
 from src.domain.models import ChatMessage, ChatRequest, ChatResponse, RoutingDecision
 from src.services.analyzer import ContextAnalyzer
 from src.services.compressor import ContextCompressor
+from src.services.context_manager import ContextManager
 from src.services.key_manager import KeyManager
 from src.services.metrics_service import MetricsService
 from src.services.observability import Observability
 from src.services.scraper import WebScraper
 from src.services.session_orchestrator import SessionOrchestrator
 from src.services.web_context_service import WebContextService
-
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ class Gateway(IRouter):
         self.scraper = scraper or WebScraper()
         self.compressor = compressor or ContextCompressor()
         self.metrics_service = metrics_service or MetricsService(self.session_manager)
+        self.context_manager = ContextManager()
 
         self.web_context = WebContextService(
             self.analyzer, self.scraper, self.compressor, self.session_manager
@@ -108,7 +110,8 @@ class Gateway(IRouter):
             seen = set()
             merged: list[ChatMessage] = []
             for m in history + request.messages:
-                key = (m.role, str(m.content).strip()[:200])
+                content_str = str(m.content).strip()
+                key = (m.role, content_str[:300])
                 if key not in seen:
                     merged.append(m)
                     seen.add(key)
@@ -117,31 +120,71 @@ class Gateway(IRouter):
         routing_start = time.time()
         available_tiers = self._get_available_tiers()
         decision = await self.analyzer.analyze(request, available_tiers=available_tiers)
-        Observability.record_step(
-            "routing", time.time() - routing_start, {"model": decision.model_name}
+
+        tokens = request.estimate_token_count()
+        routing_log = (
+            f"Routing decision for session {request.session_id}: "
+            f"provider={decision.provider.value if decision and decision.provider else 'N/A'}, "
+            f"model={decision.model_name if decision else 'N/A'}, reason={decision.reason if decision else 'N/A'}, total_tokens={tokens}"
+        )
+        logger.info(routing_log)
+
+        await self.session_manager.log_system_event(
+            level="INFO",
+            category="ROUTING",
+            message=routing_log,
+            metadata={
+                "session_id": request.session_id,
+                "decision": {
+                    "provider": decision.provider.value
+                    if decision and decision.provider
+                    else None,
+                    "model": decision.model_name if decision else None,
+                    "reason": decision.reason if decision else None,
+                    "tokens": tokens,
+                },
+            },
         )
 
-        request.model = decision.model_name
+        Observability.record_step(
+            "routing",
+            time.time() - routing_start,
+            {
+                "model": decision.model_name if decision else "N/A",
+                "reason": decision.reason if decision else "N/A",
+                "tokens": tokens,
+            },
+        )
+
+        if decision:
+            request.model = decision.model_name
 
         web_start = time.time()
         web_parts = await self.web_context.enrich_request(request)
         Observability.record_step("web_enrichment", time.time() - web_start)
 
-        llm_start = time.time()
-
+        llm_start = time.perf_counter()
         try:
             response, retry_parts = await self._execute_with_full_resilience(
                 request, decision
             )
-            latency_ms = int((time.time() - llm_start) * 1000)
+            latency_ms = int((time.perf_counter() - llm_start) * 1000)
 
-            Observability.record_step(
-                "llm_execution",
-                latency_ms / 1000,
-                {
-                    "provider": response.usage.get("gateway_provider")
-                    if response.usage
-                    else None
+            provider_name = (
+                response.usage.get("gateway_provider", "unknown")
+                if response.usage
+                else "unknown"
+            )
+
+            await self.session_manager.log_system_event(
+                level="INFO",
+                category="LLM_EXECUTION",
+                message=f"Request successful via {provider_name} ({latency_ms}ms)",
+                metadata={
+                    "request_id": request_id,
+                    "provider": provider_name,
+                    "latency_ms": latency_ms,
+                    "usage": response.usage,
                 },
             )
 
@@ -160,7 +203,17 @@ class Gateway(IRouter):
                 except Exception as me:
                     logger.warning(f"Failed to record metrics (non-fatal): {me}")
 
-            all_parts = web_parts + retry_parts
+            all_parts = (web_parts or []) + (retry_parts or [])
+            if response.choices and all_parts:
+                msg = response.choices[0].message
+                # Inject parts into message extra data
+                parts_list = [
+                    p if isinstance(p, dict) else p.model_dump() for p in all_parts
+                ]
+                if not hasattr(msg, "model_extra") or msg.model_extra is None:
+                    msg.model_extra = {}
+                msg.model_extra["parts"] = parts_list
+
             try:
                 await self.sessions.save_assistant_response(
                     request, response, extra_parts=all_parts
@@ -171,11 +224,13 @@ class Gateway(IRouter):
             if original_request_model:
                 response.model = original_request_model
 
+            self.context_manager.cleanup()
             Observability.finalize_trace()
             return response
 
         except Exception as e:
-            latency_ms = int((time.time() - llm_start) * 1000)
+            self.context_manager.cleanup()
+            latency_ms = int((time.perf_counter() - llm_start) * 1000)
             from src.core.exceptions import BaseAppError
 
             category = "INTERNAL_ERROR"
@@ -188,16 +243,30 @@ class Gateway(IRouter):
 
             logger.error(f"[{category}] Request failed: {str(e)}")
 
+            await self.session_manager.log_system_event(
+                level="ERROR",
+                category="LLM_EXECUTION",
+                message=f"Request failed: {category} - {str(e)[:100]}",
+                metadata={
+                    "request_id": request_id,
+                    "error": str(e),
+                    "category": category,
+                    "traceback": traceback.format_exc()
+                    if category == "INTERNAL_ERROR"
+                    else None,
+                },
+            )
+
             provider_name = "unknown"
-            if decision.provider:
+            if decision and decision.provider:
                 provider_name = decision.provider.value
-            elif decision.agent:
+            elif decision and decision.agent:
                 provider_name = decision.agent.value
 
             await self.metrics_service.record_request(
                 request_id=request_id,
                 provider=provider_name,
-                model=decision.model_name,
+                model=decision.model_name if decision else "unknown",
                 prompt_tokens=0,
                 completion_tokens=0,
                 latency_ms=latency_ms,
@@ -248,14 +317,9 @@ class Gateway(IRouter):
             if not self._breakers[provider_type].is_available():
                 logger.warning(f"Skipping {provider_type.value}: Circuit is OPEN")
                 if is_strict:
-                    break
-                continue
-
-        for provider_type in providers_to_try:
-            if not self._breakers[provider_type].is_available():
-                logger.warning(f"Skipping {provider_type.value}: Circuit is OPEN")
-                if is_strict:
-                    break  # 엄격 모드면 다른 제공자 시도 안함
+                    raise ResourceExhaustedError(
+                        f"Strict provider {provider_type.value} is currently unavailable (Circuit OPEN)"
+                    )
                 continue
 
             if provider_type != decision.provider:
@@ -314,7 +378,8 @@ class Gateway(IRouter):
     ) -> ChatResponse:
         logger.warning("All primary paths failed. Triggering final local fallback.")
         decision.agent = AgentType.OLLAMA
-        decision.model_name = "ollama"
+        decision.model_name = ""
+        request.model = ""
         return await self._process_with_agent(request, decision)
 
     def _enrich_response_usage(
@@ -332,6 +397,7 @@ class Gateway(IRouter):
                 "gateway_provider": provider.value,
                 "gateway_key_index": idx,
                 "gateway_model": decision.model_name,
+                "routing_reason": decision.reason,
             }
         )
 
@@ -342,7 +408,9 @@ class Gateway(IRouter):
         adapter_key = (provider, api_key)
         if adapter_key not in self._adapters:
             if provider == ProviderType.GEMINI:
-                self._adapters[adapter_key] = GeminiAdapter(api_key)
+                self._adapters[adapter_key] = GeminiAdapter(
+                    api_key, self.context_manager
+                )
             elif provider == ProviderType.GROQ:
                 self._adapters[adapter_key] = OpenAICompatAdapter(
                     "https://api.groq.com/openai/v1",
@@ -350,11 +418,7 @@ class Gateway(IRouter):
                     default_model=ModelType.GROQ_LLAMA_3_3_70B.value,
                 )
             elif provider == ProviderType.CEREBRAS:
-                self._adapters[adapter_key] = OpenAICompatAdapter(
-                    "https://api.cerebras.ai/v1",
-                    api_key,
-                    default_model="llama3.1-70b",
-                )
+                self._adapters[adapter_key] = CerebrasAdapter(api_key)
         return self._adapters[adapter_key]
 
     async def _process_with_agent(
@@ -387,13 +451,21 @@ class Gateway(IRouter):
                 pass
 
         if (
-            decision.model_name == agent.value
+            not decision.model_name
+            or decision.model_name == agent.value
+            or decision.model_name == "auto"
             or decision.model_name not in agent_models
-            or not decision.model_name
         ):
             if agent_models:
-                decision.model_name = agent_models[0]
-                request.model = agent_models[0]
+                target = next(
+                    (m for m in agent_models if "llama" in m.lower()), agent_models[0]
+                )
+                decision.model_name = target
+                request.model = target
+            else:
+                fallback_model = "llama3"
+                decision.model_name = fallback_model
+                request.model = fallback_model
 
         adapter = self._get_agent_adapter(agent)
         resp = await adapter.generate(request, "local-agent")
@@ -406,6 +478,7 @@ class Gateway(IRouter):
                 "gateway_provider": "LOCAL-AGENT",
                 "gateway_key_index": 0,
                 "gateway_model": full_model_path,
+                "routing_reason": decision.reason,
             }
         )
         resp.model = full_model_path
@@ -418,7 +491,7 @@ class Gateway(IRouter):
                 self._adapters[key] = OpenAICompatAdapter(
                     base_url=settings.ollama_base_url,
                     api_key="ollama",
-                    default_model="",
+                    default_model=None,
                 )
 
             else:

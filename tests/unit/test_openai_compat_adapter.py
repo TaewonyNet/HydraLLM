@@ -1,8 +1,9 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+
 from src.adapters.providers.openai_compat import OpenAICompatAdapter
-from src.domain.models import ChatRequest, ChatMessage
+from src.domain.models import ChatMessage, ChatRequest
 
 
 @pytest.mark.asyncio

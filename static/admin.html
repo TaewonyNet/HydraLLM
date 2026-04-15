@@ -168,7 +168,7 @@
 
         async function loadDashboard() {
             try {
-                const res = await fetch('/v1/admin/dashboard');
+                const res = await fetch('http://localhost:8000/v1/admin/dashboard');
                 const data = await res.json();
                 
                 document.getElementById('stat-tokens').textContent = (data.total_tokens || 0).toLocaleString();
@@ -310,7 +310,7 @@
             const tbody = document.querySelector('#logs-table tbody');
             tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">불러오는 중...</td></tr>';
             try {
-                const res = await fetch('/v1/admin/logs?limit=50');
+                const res = await fetch('http://localhost:8000/v1/admin/logs?limit=50');
                 const logs = await res.json();
                 tbody.innerHTML = logs.map(l => `
                     <tr>
@@ -328,7 +328,7 @@
         async function loadModels() {
             const select = document.getElementById('model-select');
             try {
-                const res = await fetch('/v1/models');
+                const res = await fetch('http://localhost:8000/v1/models');
                 const data = await res.json();
                 select.innerHTML = '<option value="auto">Auto Routing</option>' + 
                     data.data.map(m => `<option value="${m.id}">${m.display_name || m.id}</option>`).join('');
@@ -344,7 +344,7 @@
             input.value = '';
             
             try {
-                const res = await fetch('/v1/chat/completions', {
+                const res = await fetch('http://localhost:8000/v1/chat/completions', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -369,7 +369,7 @@
 
         async function refreshGlobalStatus() {
             try {
-                const res = await fetch('/v1/admin/status');
+                const res = await fetch('http://localhost:8000/v1/admin/status');
                 const data = await res.json();
                 const badge = document.getElementById('global-status');
                 if (data.status && data.status.status === 'healthy') {

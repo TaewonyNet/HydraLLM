@@ -236,7 +236,7 @@
 
         async function loadDashboard() {
             try {
-                const res = await fetch('/v1/admin/dashboard');
+                const res = await fetch('http://localhost:8000/v1/admin/dashboard');
                 const data = await res.json();
                 document.getElementById('stat-tokens').textContent = (data.total_tokens || 0).toLocaleString();
                 document.getElementById('stat-requests').textContent = (data.total_requests || 0).toLocaleString();
@@ -278,14 +278,48 @@
 
         function updateScrapingTable(recentData) {
             let container = document.getElementById('scraping-usage-container');
-            if (!container) { container = document.createElement('div'); container.id = 'scraping-usage-container'; container.className = 'card'; document.getElementById('view-dashboard').appendChild(container); }
-            container.innerHTML = `<h3>최근 웹 스크래핑 내역</h3><table><thead><tr><th>Time</th><th>URL</th><th>Status</th><th>Length</th><th>Latency</th></tr></thead><tbody>${recentData.map(r => `<tr><td>${new Date(r.created_at).toLocaleTimeString()}</td><td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${r.url}</td><td><span class="badge badge-${r.status==='success'?'success':(r.status==='cache_hit'?'info':'danger')}">${r.status}</span></td><td>${r.chars_count.toLocaleString()}자</td><td>${r.latency_ms}ms</td></tr>`).join('')}</tbody></table>`;
+            if (!container) { 
+                container = document.createElement('div'); 
+                container.id = 'scraping-usage-container'; 
+                container.className = 'card'; 
+                document.getElementById('view-dashboard').appendChild(container); 
+            }
+            container.innerHTML = `
+                <h3>최근 웹 스크래핑 내역</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Query / URL</th>
+                            <th>Status</th>
+                            <th>Length</th>
+                            <th>Latency</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${recentData.map(r => {
+                            const displayQuery = r.query ? `<strong>Q: ${r.query}</strong><br><small>${r.url}</small>` : r.url;
+                            const summary = r.response_summary ? `<div style="font-size:0.7rem; color:#888; margin-top:5px; border-top:1px dashed #eee; padding-top:3px;">${r.response_summary}...</div>` : '';
+                            return `
+                                <tr>
+                                    <td>${new Date(r.created_at).toLocaleTimeString()}</td>
+                                    <td style="max-width:400px; overflow:hidden; text-overflow:ellipsis;">
+                                        ${displayQuery}
+                                        ${summary}
+                                    </td>
+                                    <td><span class="badge badge-${r.status==='success'?'success':(r.status==='cache_hit'?'info':'danger')}">${r.status}</span></td>
+                                    <td>${(r.chars_count||0).toLocaleString()}자</td>
+                                    <td>${r.latency_ms}ms</td>
+                                </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>`;
         }
 
         async function refreshSidebarStatus() {
             const content = document.getElementById('sidebar-content');
             try {
-                const res = await fetch('/v1/admin/status');
+                const res = await fetch('http://localhost:8000/v1/admin/status');
                 const data = await res.json();
                 const providers = data.status.providers || {};
                 const keyStats = data.key_statistics || {};
@@ -307,7 +341,7 @@
             document.getElementById('send-btn').disabled = true;
             const loading = document.createElement('div'); loading.className = 'message msg-assistant loading'; loading.textContent = 'Thinking...'; document.getElementById('chat-history').appendChild(loading);
             try {
-                const res = await fetch('/v1/chat/completions', {
+                const res = await fetch('http://localhost:8000/v1/chat/completions', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model: document.getElementById('model-select').value, messages: [{role: 'user', content: text}], session_id: currentSessionId, has_search: document.getElementById('search-check').checked, auto_web_fetch: document.getElementById('auto-fetch-check').checked, compress_context: document.getElementById('compress-check').checked, temperature: parseFloat(document.getElementById('temp-input').value) })
                 });
@@ -329,6 +363,36 @@
             if (role === 'assistant') {
                 div.innerHTML = DOMPurify.sanitize(marked.parse(content));
                 
+                // 참조 사이트(Parts) 표시 로직 추가
+                if (data && data.choices && data.choices[0].message.parts) {
+                    const parts = data.choices[0].message.parts;
+                    const webParts = parts.filter(p => p.type === 'web_fetch' || p.type === 'web_search');
+                    
+                    if (webParts.length > 0) {
+                        const sourceContainer = document.createElement('div');
+                        sourceContainer.style.cssText = 'margin-top:12px; padding:10px; border:1px solid #e0e0e0; border-radius:8px; background:#f9f9f9; font-size:0.8rem;';
+                        
+                        let html = '<div style="font-weight:bold; margin-bottom:6px; color:#333;"><i class="fas fa-link"></i> 참조 사이트 및 정보원</div>';
+                        html += '<div style="display:flex; flex-wrap:wrap; gap:6px;">';
+                        
+                        webParts.forEach(p => {
+                            const d = p.data;
+                            const label = p.type === 'web_search' ? `🔍 검색: ${d.query}` : d.url;
+                            const statusColor = d.status === 'success' ? '#28a745' : (d.status === 'cache_hit' ? '#17a2b8' : '#dc3545');
+                            const shortLabel = label.length > 50 ? label.substring(0, 47) + '...' : label;
+                            
+                            html += `<a href="${d.url || '#'}" target="_blank" class="badge" style="background:white; border:1px solid ${statusColor}; color:${statusColor}; padding:4px 8px; text-decoration:none; display:flex; align-items:center; gap:4px;" title="${label}">
+                                <span style="width:6px; height:6px; border-radius:50%; background:${statusColor};"></span>
+                                ${shortLabel}
+                            </a>`;
+                        });
+                        
+                        html += '</div>';
+                        sourceContainer.innerHTML = html;
+                        div.appendChild(sourceContainer);
+                    }
+                }
+                
                 if (data && data.usage && (data.usage.gateway_provider || data.usage.gateway_model)) {
                     const meta = document.createElement('div');
                     meta.style.cssText = 'font-size:0.7rem; color:#555; margin-top:10px; padding:10px; border-top:1px solid #eee; background:rgba(0,0,0,0.02); border-radius:4px; display:flex; justify-content:space-between; align-items:center;';
@@ -338,8 +402,9 @@
                     
                     // 제공자 및 모델 상세 경로 표시
                     const displayPath = modelPath.includes('LOCAL-AGENT') ? modelPath : `${provider}/${modelPath}`;
+                    const reason = data.usage.routing_reason ? `<span style="margin-left:8px; color:#aaa;">(${data.usage.routing_reason})</span>` : '';
                     
-                    meta.innerHTML = `<div><span style="color:#888;">via</span> <span style="font-family:monospace; font-weight:bold;">${displayPath}</span></div> <span class="badge badge-info" style="font-size:0.6rem; opacity:0.8;">Key #${data.usage.gateway_key_index || 0}</span>`;
+                    meta.innerHTML = `<div><span style="color:#888;">via</span> <span style="font-family:monospace; font-weight:bold;">${displayPath}</span>${reason}</div> <span class="badge badge-info" style="font-size:0.6rem; opacity:0.8;">Key #${data.usage.gateway_key_index || 0}</span>`;
                     div.appendChild(meta);
                 }
             } else {
@@ -352,7 +417,7 @@
 
         async function loadModels() {
             try {
-                const res = await fetch('/v1/models');
+                const res = await fetch('http://localhost:8000/v1/models');
                 const data = await res.json(); availableModels = data.data;
                 const select = document.getElementById('model-select');
                 select.innerHTML = '<option value="auto">✨ mllm/auto (지능형 자동 라우팅)</option>' + availableModels.map(m => `<option value="${m.id}">${m.display_name || m.id}</option>`).join('');
@@ -369,7 +434,7 @@
         }
 
         async function createNewSession() {
-            const res = await fetch('/v1/admin/sessions/new', { method: 'POST' });
+            const res = await fetch('http://localhost:8000/v1/admin/sessions/new', { method: 'POST' });
             const data = await res.json();
             currentSessionId = data.session_id; localStorage.setItem('hydra_session_id', currentSessionId);
             document.getElementById('chat-history').innerHTML = '';
@@ -380,7 +445,7 @@
 
         async function loadSessions() {
             try {
-                const res = await fetch('/v1/admin/sessions');
+                const res = await fetch('http://localhost:8000/v1/admin/sessions');
                 const data = await res.json();
                 const list = document.getElementById('session-list');
                 list.innerHTML = data.map(s => `<div onclick="switchSession('${s.session_id}')" class="session-item ${s.session_id===currentSessionId?'active':''}"><strong>${s.title||'Conversation'}</strong><br><small>${new Date(s.updated_at).toLocaleString()}</small></div>`).join('');
@@ -396,7 +461,7 @@
 
         async function loadLogs() {
             try {
-                const res = await fetch('/v1/admin/logs?limit=50');
+                const res = await fetch('http://localhost:8000/v1/admin/logs?limit=50');
                 const data = await res.json();
                 const tbody = document.querySelector('#logs-table tbody');
                 if (!data || data.length === 0) {
@@ -407,16 +472,16 @@
             } catch (e) { console.error('Log load failed:', e); }
         }
 
-        async function probeKeys() { await fetch('/v1/admin/probe', { method: 'POST' }); showBottomModal('재검증 작업이 시작되었습니다.'); refreshSidebarStatus(); }
+        async function probeKeys() { await fetch('http://localhost:8000/v1/admin/probe', { method: 'POST' }); showBottomModal('재검증 작업이 시작되었습니다.'); refreshSidebarStatus(); }
 
         async function addKeys() {
             const p = document.getElementById('key-provider').value; const k = document.getElementById('new-key-input').value;
             if (!k) return;
-            await fetch(`/v1/admin/keys?provider=${p}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(k.split(',').map(s=>s.trim())) });
+            await fetch(`http://localhost:8000/v1/admin/keys?provider=${p}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(k.split(',').map(s=>s.trim())) });
             showBottomModal('키가 추가되었습니다.'); document.getElementById('new-key-input').value = ''; refreshSidebarStatus();
         }
 
-        async function refreshModelDiscovery() { await fetch('/v1/admin/refresh-models', { method: 'POST' }); showBottomModal('모델 정보 동기화 완료'); loadModels(); }
+        async function refreshModelDiscovery() { await fetch('http://localhost:8000/v1/admin/refresh-models', { method: 'POST' }); showBottomModal('모델 정보 동기화 완료'); loadModels(); }
 
         function exportSession() {
             const blob = new Blob([JSON.stringify({session_id: currentSessionId, export_at: new Date()})], {type: 'application/json'});
@@ -425,13 +490,13 @@
 
         async function deleteCurrentSession() {
             if (!confirm('현재 세션을 영구 삭제하시겠습니까?')) return;
-            await fetch(`/v1/admin/sessions/${currentSessionId}`, { method: 'DELETE' });
+            await fetch(`http://localhost:8000/v1/admin/sessions/${currentSessionId}`, { method: 'DELETE' });
             localStorage.removeItem('hydra_session_id'); createNewSession();
         }
 
         async function checkOnboarding() {
             try {
-                const res = await fetch('/v1/admin/onboarding');
+                const res = await fetch('http://localhost:8000/v1/admin/onboarding');
                 const data = await res.json();
                 const overlay = document.getElementById('onboarding-overlay');
                 if (data.completed) { overlay.classList.remove('active'); overlay.style.display = 'none'; return; }
@@ -447,7 +512,7 @@
 
         async function saveOnboarding() {
             const enabled = Array.from(document.querySelectorAll('input[name="model-select"]:checked')).map(i => i.value);
-            await fetch('/v1/admin/onboarding', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ enabled_models: enabled }) });
+            await fetch('http://localhost:8000/v1/admin/onboarding', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ enabled_models: enabled }) });
             const overlay = document.getElementById('onboarding-overlay'); overlay.classList.remove('active'); setTimeout(() => overlay.style.display = 'none', 500);
             showBottomModal('설정이 완료되었습니다.'); loadModels();
         }

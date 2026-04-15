@@ -1,9 +1,11 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from src.services.gateway import Gateway
-from src.domain.models import ChatRequest, ChatMessage
-from src.domain.enums import ProviderType, ModelType
+
 from src.core.exceptions import RateLimitError
+from src.domain.enums import ProviderType
+from src.domain.models import ChatMessage, ChatRequest
+from src.services.gateway import Gateway
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,8 @@
 import asyncio
 import logging
-import pytest
+
+from src.domain.models import ChatMessage, ChatRequest
 from src.services.gateway import Gateway
-from src.domain.models import ChatRequest, ChatMessage
-from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AutoModelTest")

@@ -1,18 +1,12 @@
 import asyncio
 import logging
 import sys
-import json
-from pathlib import Path
-
-import sys
-import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from src.domain.models import ChatMessage, ChatRequest
 from src.services.gateway import Gateway
-from src.domain.models import ChatRequest, ChatMessage
-from src.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AutoModelTest")
@@ -30,7 +24,7 @@ async def test_auto_variants():
     results = []
 
     for model_hint in model_variants:
-        print(f"\n" + "=" * 50)
+        print("\n" + "=" * 50)
         print(f"🚀 Testing Model Variant: {model_hint}")
         print("=" * 50)
 
@@ -51,7 +45,7 @@ async def test_auto_variants():
                 provider = response.usage.get("gateway_provider", "unknown")
                 actual_model = response.usage.get("gateway_model", "unknown")
 
-                print(f"✅ Success!")
+                print("✅ Success!")
                 print(f"   - Provider: {provider}")
                 print(f"   - Resolved Model: {actual_model}")
                 print(f"   - Response Snippet: {content[:150]}...")

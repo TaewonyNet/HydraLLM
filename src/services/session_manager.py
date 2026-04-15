@@ -6,6 +6,7 @@ import json
 import logging
 import sqlite3
 import subprocess
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -35,26 +36,33 @@ def _get_project_id() -> str:
 
 class SessionManager(ISessionManager):
     def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or settings.database_path
+        import os
+
+        base_dir = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        raw_path = db_path or settings.database_path
+        if not os.path.isabs(raw_path):
+            self.db_path = os.path.join(base_dir, raw_path)
+        else:
+            self.db_path = raw_path
+
         self.project_id = _get_project_id()
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
         self._init_db()
 
     # ─── 커넥션 관리 ───
 
     def _get_conn(self) -> sqlite3.Connection:
-        """영속 커넥션 반환. 없으면 생성."""
         if self._conn is None:
             self._conn = sqlite3.connect(
-                self.db_path,
-                check_same_thread=False,
+                self.db_path, check_same_thread=False, timeout=30.0
             )
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.execute("PRAGMA cache_size=-64000")
-            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._conn.execute("PRAGMA busy_timeout=30000")
         return self._conn
 
     def close(self) -> None:
@@ -953,27 +961,29 @@ class SessionManager(ISessionManager):
         status: str = "success",
         endpoint: str = "chat",
     ) -> None:
-        try:
-            conn = self._get_conn()
-            conn.execute(
-                """INSERT INTO usage_metrics 
-                   (request_id, provider, model, endpoint, prompt_tokens, completion_tokens, total_tokens, latency_ms, status) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    request_id,
-                    provider,
-                    model,
-                    endpoint,
-                    prompt_tokens,
-                    completion_tokens,
-                    prompt_tokens + completion_tokens,
-                    latency_ms,
-                    status,
-                ),
-            )
-            conn.commit()
-        except Exception as e:
-            logger.error(f"Error recording usage: {e}")
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                now = datetime.now().isoformat()
+                conn.execute(
+                    """INSERT INTO usage_metrics
+                       (request_id, provider, model, endpoint, prompt_tokens, completion_tokens, total_tokens, latency_ms, status, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        request_id,
+                        provider,
+                        model,
+                        endpoint,
+                        prompt_tokens,
+                        completion_tokens,
+                        prompt_tokens + completion_tokens,
+                        latency_ms,
+                        status,
+                        now,
+                    ),
+                )
+            except Exception as e:
+                logger.error(f"Error recording usage: {e}")
 
     async def record_usage(
         self,
@@ -1002,10 +1012,10 @@ class SessionManager(ISessionManager):
         def _get() -> list[dict[str, Any]]:
             conn = self._get_conn()
             rows = conn.execute(
-                """SELECT provider, model, 
-                          COALESCE(SUM(prompt_tokens), 0) as prompt, 
+                """SELECT provider, model,
+                          COALESCE(SUM(prompt_tokens), 0) as prompt,
                           COALESCE(SUM(completion_tokens), 0) as completion,
-                          COALESCE(SUM(total_tokens), 0) as total, 
+                          COALESCE(SUM(total_tokens), 0) as total,
                           COUNT(*) as count
                    FROM usage_metrics GROUP BY provider, model"""
             ).fetchall()
@@ -1097,8 +1107,8 @@ class SessionManager(ISessionManager):
         try:
             conn = self._get_conn()
             row = conn.execute(
-                """SELECT content FROM web_content_cache 
-                   WHERE url = ? AND 
+                """SELECT content FROM web_content_cache
+                   WHERE url = ? AND
                    (julianday('now') - julianday(cached_at)) * 24 < ?""",
                 (url, ttl_hours),
             ).fetchone()
@@ -1114,7 +1124,7 @@ class SessionManager(ISessionManager):
         try:
             conn = self._get_conn()
             conn.execute(
-                """INSERT OR REPLACE INTO web_content_cache (url, content, mode, cached_at) 
+                """INSERT OR REPLACE INTO web_content_cache (url, content, mode, cached_at)
                    VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f','now'))""",
                 (url, content, mode),
             )
@@ -1126,22 +1136,39 @@ class SessionManager(ISessionManager):
         await asyncio.to_thread(self._set_web_cache_sync, url, content, mode)
 
     def _record_scraping_sync(
-        self, url: str, status: str, chars: int, latency: int
+        self,
+        url: str,
+        status: str,
+        chars: int,
+        latency: int,
+        query: str | None = None,
+        summary: str | None = None,
     ) -> None:
-        try:
-            conn = self._get_conn()
-            conn.execute(
-                "INSERT INTO scraping_metrics (url, status, chars_count, latency_ms) VALUES (?, ?, ?, ?)",
-                (url, status, chars, latency),
-            )
-            conn.commit()
-        except Exception as e:
-            logger.error(f"Error recording scraping metrics: {e}")
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                now = datetime.now().isoformat()
+                conn.execute(
+                    """INSERT INTO scraping_metrics (url, query, status, chars_count, response_summary, latency_ms, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (url, query, status, chars, summary, latency, now),
+                )
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Error recording scraping metrics: {e}")
 
     async def record_scraping(
-        self, url: str, status: str, chars: int, latency: int
+        self,
+        url: str,
+        status: str,
+        chars: int,
+        latency: int,
+        query: str | None = None,
+        summary: str | None = None,
     ) -> None:
-        await asyncio.to_thread(self._record_scraping_sync, url, status, chars, latency)
+        await asyncio.to_thread(
+            self._record_scraping_sync, url, status, chars, latency, query, summary
+        )
 
     async def get_scraping_summary(self) -> dict[str, Any]:
         def _get():

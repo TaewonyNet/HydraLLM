@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from .enums import AgentType, ProviderType
+from ..enums.logic import AgentType, ProviderType
 
 
 class ProviderStatus(BaseModel):

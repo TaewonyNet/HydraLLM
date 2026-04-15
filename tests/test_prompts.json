@@ -1,0 +1,32 @@
+[
+  {
+    "id": "weather_01",
+    "category": "weather",
+    "prompt": "오늘 서울 날씨 어때?",
+    "expected_checks": ["contains_date", "no_naver"]
+  },
+  {
+    "id": "news_01",
+    "category": "news",
+    "prompt": "오늘의 주요 뉴스 3개만 핵심 요약해줘.",
+    "expected_checks": ["contains_date", "no_naver"]
+  },
+  {
+    "id": "url_fetch_01",
+    "category": "url",
+    "prompt": "https://news.sbs.co.kr/news/endPage.do?news_id=N1010793627 이 기사 내용 요약해줘.",
+    "expected_checks": ["has_summary"]
+  },
+  {
+    "id": "stock_01",
+    "category": "finance",
+    "prompt": "오늘 삼성전자 주가랑 관련 주요 뉴스 하나 알려줘.",
+    "expected_checks": ["contains_date", "no_naver"]
+  },
+  {
+    "id": "complex_01",
+    "category": "complex",
+    "prompt": "내일 제주도 날씨 확인하고, 야외 활동하기 적당한지랑 관련 뉴스 하나 알려줘.",
+    "expected_checks": ["contains_date", "no_naver"]
+  }
+]

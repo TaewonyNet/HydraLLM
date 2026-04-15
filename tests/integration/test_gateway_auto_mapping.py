@@ -1,9 +1,11 @@
-import pytest
 import uuid
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from src.domain.enums import ProviderType
+from src.domain.models import ChatMessage, ChatRequest
 from src.services.gateway import Gateway
-from src.domain.models import ChatRequest, ChatMessage
-from src.domain.enums import ProviderType, ModelType
 
 
 @pytest.mark.asyncio

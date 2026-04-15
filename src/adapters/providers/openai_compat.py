@@ -40,13 +40,19 @@ class OpenAICompatAdapter(ILLMProvider):
             raise ServiceUnavailableError(error_msg)
 
         for msg in request.messages:
-            msg_content: Any
-            if isinstance(msg.content, dict | list):
-                msg_content = msg.content
-            else:
-                msg_content = str(msg.content)
+            msg_content = msg.content
+            if isinstance(msg_content, list):
+                text_parts = []
+                for part in msg_content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                msg_content = " ".join(text_parts)
+            elif isinstance(msg_content, dict):
+                msg_content = msg_content.get("text", str(msg_content))
 
-            msg_dict = {"role": msg.role, "content": msg_content}
+            msg_dict = {"role": msg.role, "content": str(msg_content)}
             if msg.name:
                 msg_dict["name"] = msg.name
             messages.append(msg_dict)
@@ -69,10 +75,19 @@ class OpenAICompatAdapter(ILLMProvider):
             "llama3.2",
         ]
         if not model or model.lower() in generic_hints:
-            model = self.default_model
+            if self.default_model:
+                model = self.default_model
+            else:
+                try:
+                    available = await self.discover_models()
+                    if available:
+                        model = available[0]["id"]
+                        self.default_model = model
+                except Exception:
+                    pass
 
         if not model:
-            error_msg = "No model specified"
+            error_msg = "No model specified and discovery failed"
             raise ServiceUnavailableError(error_msg)
 
         logger.info(f"Sending request to {self.client.base_url} with model {model}")
@@ -150,18 +165,23 @@ class OpenAICompatAdapter(ILLMProvider):
         )
 
     async def discover_models(self) -> list[dict[str, Any]]:
-        """Discover available models from OpenAI-compatible provider with metadata."""
         try:
             response = await self.client.models.list()
-            return [
-                {
-                    "id": m.id,
-                    "display_name": m.id,
-                    "description": f"Model from {self.client.base_url}",
-                    "tier": "standard",
-                }
-                for m in response.data
-            ]
+            all_models = []
+            for m in response.data:
+                m_id = m.id.lower()
+                if any(x in m_id for x in ["embed", "rerank", "vision-adapter"]):
+                    continue
+
+                all_models.append(
+                    {
+                        "id": m.id,
+                        "display_name": m.id,
+                        "description": f"Model from {self.client.base_url}",
+                        "tier": "standard",
+                    }
+                )
+            return all_models
         except Exception as e:
             logger.error(f"Failed to discover models from {self.client.base_url}: {e}")
             return []

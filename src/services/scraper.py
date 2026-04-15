@@ -1,9 +1,20 @@
 import asyncio
 import ipaddress
 import logging
+import re
 import socket
 import urllib.parse
-from typing import Literal, cast
+from typing import Any, Literal, cast
+
+try:
+    import curl_cffi.requests as _cffi_req
+
+    if not hasattr(_cffi_req, "BrowserTypeLiteral"):
+        _cffi_req.BrowserTypeLiteral = Any
+    if not hasattr(_cffi_req, "ProxySpec"):
+        _cffi_req.ProxySpec = Any
+except ImportError:
+    pass
 
 from bs4 import BeautifulSoup  # type: ignore
 from playwright.async_api import Browser, Playwright, async_playwright
@@ -163,14 +174,37 @@ class WebScraper:
 
     def _extract_clean_text(self, html: str, mode: ScrapeMode) -> str:
         soup = BeautifulSoup(html, "html.parser")
-        for element in soup(["script", "style", "iframe", "form", "button", "input"]):
+        for element in soup(
+            [
+                "script",
+                "style",
+                "iframe",
+                "form",
+                "button",
+                "input",
+                "nav",
+                "footer",
+                "header",
+                "aside",
+                "noscript",
+                "svg",
+                "path",
+            ]
+        ):
             element.decompose()
-        if mode == "standard":
-            for element in soup(
-                ["nav", "footer", "header", "aside", "noscript", "svg", "path"]
-            ):
-                element.decompose()
-        text = soup.get_text(separator="\n")
+
+        main_content = (
+            soup.find("article")
+            or soup.find("main")
+            or soup.find(id=re.compile(r"content|post|article", re.I))
+            or soup.find(class_=re.compile(r"content|post|article", re.I))
+        )
+
+        if main_content:
+            text = main_content.get_text(separator="\n")
+        else:
+            text = soup.get_text(separator="\n")
+
         lines = (line.strip() for line in text.splitlines())
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         text = "\n".join(chunk for chunk in chunks if chunk)

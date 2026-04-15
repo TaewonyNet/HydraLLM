@@ -5,9 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.services.gateway import Gateway
-from src.domain.models import ChatRequest, ChatMessage
 from src.domain.enums import ProviderType
+from src.domain.models import ChatMessage, ChatRequest
+from src.services.gateway import Gateway
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AutoValidation")
@@ -49,7 +49,7 @@ async def validate_auto_modes():
             print(f"   -> Result: Provider={actual_provider}, Model={actual_model}")
 
             if actual_provider == expected_provider.value:
-                print(f"   ✅ PASS: Correct provider used.")
+                print("   ✅ PASS: Correct provider used.")
             else:
                 print(
                     f"   ❌ FAIL: Routed to {actual_provider} instead of {expected_provider.value}"
@@ -59,11 +59,11 @@ async def validate_auto_modes():
             print(f"   ⚠️ Request attempted but failed: {e}")
             if expected_provider.value in str(e).lower():
                 print(
-                    f"   ✅ PASS (Validation): Attempted correct provider but hit resource limit."
+                    "   ✅ PASS (Validation): Attempted correct provider but hit resource limit."
                 )
             else:
                 print(
-                    f"   ❌ FAIL (Validation): Failed with unexpected error or wrong provider context."
+                    "   ❌ FAIL (Validation): Failed with unexpected error or wrong provider context."
                 )
 
 

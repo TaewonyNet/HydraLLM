@@ -16,10 +16,13 @@ openai = "^1.0.0"
 google-generativeai = "^0.8.0"
 requests = "^2.31.0"
 playwright = "^1.40.0"
+patchright = "^1.40.0"
 beautifulsoup4 = "^4.12.0"
 scrapling = "^0.4.2"
 browserforge = "^1.2.4"
 llmlingua = "^0.2.1"
+curl_cffi = "^0.6.2"
+msgspec = "^0.18.5"
 
 [tool.poetry.extras]
 compression = ["llmlingua"]

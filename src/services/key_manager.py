@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -98,22 +99,39 @@ class KeyManager(IKeyManager):
     async def report_failure(
         self, provider: ProviderType, api_key: str, error: Exception
     ) -> None:
-        """
-        Report a failed API call for the key.
+        error_msg = str(error).lower()
+        is_quota_error = "quota" in error_msg or "billing" in error_msg
+        is_forbidden = "403" in error_msg or "denied" in error_msg
 
-        Args:
-            provider: The provider type
-            api_key: The API key that failed
-            error: The error that occurred
-        """
-        # Move key to failed pool
         if api_key in self._active_keys.get(provider, []):
             self._active_keys[provider].remove(api_key)
             if provider not in self._failed_keys:
                 self._failed_keys[provider] = []
             self._failed_keys[provider].append(api_key)
-            self._logger.warning(
-                f"Key {api_key[:8]}... failed for provider {provider.value}: {str(error)}"
+
+            if is_forbidden:
+                cooldown_seconds = 86400
+            elif is_quota_error:
+                cooldown_seconds = 3600
+            else:
+                cooldown_seconds = self.cooldown_period.total_seconds()
+
+            self.update_key_metadata(
+                provider,
+                api_key,
+                {
+                    "failed_at": time.time(),
+                    "error": error_msg,
+                    "is_quota_limit": is_quota_error,
+                    "is_forbidden": is_forbidden,
+                    "cooldown_until": time.time() + cooldown_seconds,
+                },
+            )
+
+            log_level = logging.ERROR if is_forbidden else logging.WARNING
+            self._logger.log(
+                log_level,
+                f"Key {api_key[:8]}... failed for provider {provider.value} (Forbidden: {is_forbidden}): {error_msg[:100]}",
             )
 
     def get_key_status(self) -> dict[ProviderType, dict[str, Any]]:
@@ -220,6 +238,39 @@ class KeyManager(IKeyManager):
         except ValueError:
             return -1
 
+    async def get_all_supported_models(self) -> list[dict[str, Any]]:
+        all_models = []
+        for provider, keys in self._active_keys.items():
+            if keys:
+                if provider == ProviderType.GEMINI:
+                    all_models.append(
+                        {
+                            "id": "gemini-2.5-flash",
+                            "display_name": "Gemini 2.5 Flash",
+                            "owned_by": "google",
+                            "tier": "free",
+                            "capabilities": {
+                                "max_tokens": 1000000,
+                                "multimodal": True,
+                                "has_search": True,
+                            },
+                        }
+                    )
+                elif provider == ProviderType.GROQ:
+                    all_models.append(
+                        {
+                            "id": "llama-3.3-70b-versatile",
+                            "display_name": "Llama 3.3 70B",
+                            "owned_by": "groq",
+                            "tier": "standard",
+                            "capabilities": {
+                                "max_tokens": 8192,
+                                "multimodal": False,
+                                "has_search": False,
+                            },
+                        }
+                    )
+        return all_models
+
     def get_next_key_sync(self, provider: ProviderType) -> str:
-        """Synchronous version of get_next_key for testing."""
         return asyncio.run(self.get_next_key(provider))

@@ -92,19 +92,41 @@ class ContextAnalyzer(IContextAnalyzer):
         available_tiers: dict[ProviderType, set[str]] | None = None,
     ) -> RoutingDecision:
         model_hint = request.model.lower() if request.model else "auto"
-
-        if model_hint in ["mllm/auto", "auto"]:
-            model_hint = "auto"
-
         preferred_provider = None
+
         if "/" in model_hint:
             parts = model_hint.split("/")
-            if parts[1] == "auto":
-                try:
-                    preferred_provider = ProviderType(parts[0])
-                    model_hint = "auto"
-                except ValueError:
-                    pass
+            p_name = parts[0]
+            if p_name in [p.value for p in ProviderType]:
+                preferred_provider = ProviderType(p_name)
+                model_hint = parts[1]
+            elif p_name in [a.value for a in AgentType]:
+                return RoutingDecision(
+                    agent=AgentType(p_name),
+                    model_name=parts[1],
+                    reason=RoutingReason.MODEL_HINT.value,
+                    confidence=1.0,
+                )
+
+        web_required = self.detect_web_intent(request)
+        estimated_tokens = request.estimate_token_count()
+        has_images = request.has_images()
+
+        if model_hint in ["mllm/auto", "auto", "default"]:
+            model_hint = "auto"
+            if estimated_tokens > 7000:
+                preferred_provider = ProviderType.GEMINI
+            elif not preferred_provider and available_tiers:
+                if (
+                    ProviderType.GROQ in available_tiers
+                    and available_tiers[ProviderType.GROQ]
+                ):
+                    preferred_provider = ProviderType.GROQ
+                elif (
+                    ProviderType.CEREBRAS in available_tiers
+                    and available_tiers[ProviderType.CEREBRAS]
+                ):
+                    preferred_provider = ProviderType.CEREBRAS
 
         if model_hint == "opencode":
             model_list = self.get_supported_models_info()
@@ -121,26 +143,21 @@ class ContextAnalyzer(IContextAnalyzer):
             )
             if working_model:
                 model_hint = working_model
-                self._logger.info(
-                    f"Auto-mapping generic 'opencode' to working sub-model: {working_model}"
-                )
 
         requested_model = self._parse_model_hint(model_hint)
-        estimated_tokens = request.estimate_token_count()
-        has_images = request.has_images()
+
         routing_strategy = self._determine_strategy(
             estimated_tokens,
             has_images,
             requested_model,
             available_tiers,
             preferred_provider,
+            web_required=web_required,
         )
         _ = self._calculate_cost(routing_strategy.get("provider"), estimated_tokens)
 
         model = routing_strategy["model"]
         model_name = model.value if hasattr(model, "value") else str(model)
-
-        web_required = self.detect_web_intent(request)
 
         decision = RoutingDecision(
             provider=routing_strategy.get("provider"),
@@ -200,6 +217,7 @@ class ContextAnalyzer(IContextAnalyzer):
             "정보",
             "어때",
             "뭐야",
+            "요약",
         ]
 
         if any(s in content_lower for s in site_keywords):
@@ -220,6 +238,7 @@ class ContextAnalyzer(IContextAnalyzer):
         requested_model: ModelType | str | None,
         available_tiers: dict[ProviderType, set[str]] | None = None,
         preferred_provider: ProviderType | None = None,
+        web_required: bool = False,
     ) -> dict[str, Any]:
         if requested_model:
             target = self._get_target_for_model(requested_model)
@@ -238,18 +257,11 @@ class ContextAnalyzer(IContextAnalyzer):
                 has_premium = available_tiers and "premium" in available_tiers.get(
                     ProviderType.GEMINI, set()
                 )
-                if has_images:
-                    model = (
-                        self._default_premium_model
-                        if has_premium
-                        else self._default_free_model
-                    )
-                else:
-                    model = (
-                        self._default_premium_model
-                        if has_premium
-                        else self._default_free_model
-                    )
+                model = (
+                    self._default_premium_model
+                    if has_premium
+                    else self._default_free_model
+                )
                 return {
                     "provider": ProviderType.GEMINI,
                     "model": model,
@@ -280,10 +292,21 @@ class ContextAnalyzer(IContextAnalyzer):
                 "reason": RoutingReason.IMAGE_PRESENT.value,
             }
 
+        if web_required:
+            has_premium_gemini = available_tiers and "premium" in available_tiers.get(
+                ProviderType.GEMINI, set()
+            )
+            return {
+                "provider": ProviderType.GEMINI,
+                "model": self._default_premium_model
+                if has_premium_gemini
+                else self._default_free_model,
+                "reason": "WEB_INTENT_REQUIRE_INTELLIGENCE",
+            }
+
         preferred_external = [
             p for p in self._provider_priority if p in ["gemini", "groq", "cerebras"]
         ]
-
         fast_threshold = self._max_tokens_fast_model
 
         if estimated_tokens < fast_threshold:
@@ -293,6 +316,17 @@ class ContextAnalyzer(IContextAnalyzer):
                     return {
                         "provider": ProviderType.GROQ,
                         "model": ModelType.GROQ_LLAMA_3_3_70B,
+                        "reason": RoutingReason.TOKEN_COUNT.value,
+                    }
+
+            if "cerebras" in self._provider_priority:
+                has_cerebras = available_tiers and available_tiers.get(
+                    ProviderType.CEREBRAS
+                )
+                if has_cerebras:
+                    return {
+                        "provider": ProviderType.CEREBRAS,
+                        "model": ModelType.CEREBRAS_LLAMA,
                         "reason": RoutingReason.TOKEN_COUNT.value,
                     }
 
@@ -343,18 +377,9 @@ class ContextAnalyzer(IContextAnalyzer):
                         "reason": RoutingReason.TOKEN_COUNT.value,
                     }
 
-            has_premium_gemini = available_tiers and "premium" in available_tiers.get(
-                ProviderType.GEMINI, set()
-            )
-            target_model = (
-                self._default_premium_model
-                if has_premium_gemini
-                else self._default_free_model
-            )
-
             return {
                 "provider": ProviderType.GEMINI,
-                "model": target_model,
+                "model": self._default_free_model,
                 "reason": RoutingReason.TOKEN_COUNT.value,
             }
 
@@ -364,7 +389,7 @@ class ContextAnalyzer(IContextAnalyzer):
         elif provider == ProviderType.GROQ:
             return ModelType.GROQ_LLAMA_3_3_70B.value
         else:
-            return ModelType.CEREBRAS_LLAMA.value
+            return "llama3.1-70b"
 
     def _get_target_for_model(self, model: ModelType | str) -> ProviderType | AgentType:
         if hasattr(self, "_dynamic_targets"):
@@ -375,6 +400,21 @@ class ContextAnalyzer(IContextAnalyzer):
                 return self._dynamic_targets[clean_id]
             if model_id in self._dynamic_targets:
                 return self._dynamic_targets[model_id]
+
+        model_str = model.value if hasattr(model, "value") else str(model)
+        model_lower = model_str.lower()
+        if "gemini" in model_lower:
+            return ProviderType.GEMINI
+        if "groq" in model_lower:
+            return ProviderType.GROQ
+        if "cerebras" in model_lower:
+            return ProviderType.CEREBRAS
+        if "ollama" in model_lower:
+            return AgentType.OLLAMA
+        if "opencode" in model_lower:
+            return AgentType.OPENCODE
+        if "openclaw" in model_lower:
+            return AgentType.OPENCLAW
 
         model_to_target: dict[ModelType, ProviderType | AgentType] = {
             ModelType.GEMINI_3_1_PRO: ProviderType.GEMINI,

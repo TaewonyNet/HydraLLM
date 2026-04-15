@@ -56,25 +56,18 @@ class CerebrasAdapter(ILLMProvider):
 
     def _convert_to_cerebras_request(self, request: ChatRequest) -> dict[str, Any]:
         messages = []
-        system_message = None
 
         if request.messages:
             for msg in request.messages:
-                if msg.role == "system":
-                    system_message = msg.content
-                else:
-                    messages.append({"role": msg.role, "content": msg.content})
+                messages.append({"role": msg.role, "content": msg.content})
 
         cerebras_request = {
-            "model": "llama3.1-70b-versatile",
+            "model": request.model or "llama3.1-70b-versatile",
             "messages": messages,
             "temperature": request.temperature or 0.7,
             "max_tokens": request.max_tokens,
             "stop": request.stop,
         }
-
-        if system_message:
-            cerebras_request["system_prompt"] = system_message
 
         logger.debug(f"Created Cerebras request with {len(messages)} messages")
         return cerebras_request

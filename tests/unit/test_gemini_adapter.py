@@ -30,8 +30,8 @@ async def test_gemini_adapter_tools_selection():
         assert len(tools) == 1
 
         tool = tools[0]
-        # Check for google_search_retrieval (currently used for all versions in this SDK)
-        assert "google_search_retrieval" in tool
+        # Check for google_search (currently used for all versions in this SDK)
+        assert "google_search" in tool
 
         # Test Gemini 2.0 model
         request_2_0 = ChatRequest(
@@ -48,7 +48,7 @@ async def test_gemini_adapter_tools_selection():
         assert len(tools) == 1
 
         tool = tools[0]
-        assert "google_search_retrieval" in tool
+        assert "google_search" in tool
 
 
 @pytest.mark.asyncio
@@ -57,7 +57,8 @@ async def test_gemini_adapter_response_parsing_with_grounding():
 
     # Mock response
     mock_response = MagicMock()
-    mock_response.text = "Grounded answer"
+    # In reality, text might be empty if parts are not text parts,
+    # but for this test we'll mock the candidate content parts
 
     # Mock grounding metadata
     mock_metadata = MagicMock()
@@ -68,6 +69,12 @@ async def test_gemini_adapter_response_parsing_with_grounding():
 
     mock_candidate = MagicMock()
     mock_candidate.grounding_metadata = mock_metadata
+
+    # Mock candidate content parts
+    mock_part = MagicMock()
+    mock_part.text = "Grounded answer"
+    mock_candidate.content.parts = [mock_part]
+
     mock_response.candidates = [mock_candidate]
 
     chat_response = adapter._convert_to_chat_response(mock_response, "gemini-1.5-pro")

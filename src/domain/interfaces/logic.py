@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .enums import ModelType, ProviderType, TierType
-from .models import (
+from ..enums.logic import ModelType, ProviderType, TierType
+from ..models import (
     ChatMessage,
     ChatRequest,
     ChatResponse,
@@ -133,7 +133,13 @@ class ISessionManager(ABC):
 
     @abstractmethod
     async def record_scraping(
-        self, url: str, status: str, chars: int, latency: int
+        self,
+        url: str,
+        status: str,
+        chars: int,
+        latency: int,
+        query: str | None = None,
+        summary: str | None = None,
     ) -> None:
         ...
 
