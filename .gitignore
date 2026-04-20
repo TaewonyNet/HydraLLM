@@ -1,52 +1,40 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.env
-.venv
-venv/
-ENV/
-env/
-.python-version
 
 # IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Tests / Coverage
-.pytest_cache/
-.mypy_cache/
-.coverage
-htmlcov/
-nosetests.xml
-pip-log.txt
-pip-delete-this-directory.txt
-
 # OS
-.DS_Store
-Thumbs.db
-
 # Project Specific
-response.json
-*.log
-logs/
+# Python
+# Tests / Coverage
+*$py.class
 *.duckdb
+*.py[cod]
+*.swo
+*.swp
+.DS_Store
+.coverage
+.env
+.idea/
+.mypy_cache/
 .opencode_logs/
-scrap_sample.txt
-
-# AI Agents & IDEs
-.claude/
-CLAUDE.md
-.sisyphus/
+.pytest_cache/
+.python-version
+.venv
+.vscode/
+AGENTS.ko.md
 AGENTS.md
-.cursor/
-.windsurf/
-.aider*
-.ipynb_checkpoints/
-
-# Temporary & Build files
-build/
-dist/
-*.egg-info/
+ENV/
+Thumbs.db
+__pycache__/
+env/
+htmlcov/
+like_me/data/corpus/
+logs/
+nosetests.xml
+pip-delete-this-directory.txt
+pip-log.txt
+response.json
+venv/
+# Runtime artifacts (may contain session data, key fragments, or user messages)
+gateway.log
+gateway_sessions.sqlite
+startup_error_debug.log
+test_out.log
