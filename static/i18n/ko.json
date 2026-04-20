@@ -1,0 +1,100 @@
+{
+  "nav": {
+    "dashboard": "대시보드",
+    "chat": "플레이그라운드",
+    "logs": "시스템 로그",
+    "settings": "설정",
+    "resource_status": "리소스 가용성"
+  },
+  "sidebar": {
+    "title": "실시간 리소스 상태",
+    "loading": "조회 중...",
+    "reprobe": "즉시 재검증 실행",
+    "load_failed": "정보 로드 실패"
+  },
+  "dashboard": {
+    "total_tokens": "누적 토큰 사용량",
+    "total_requests": "총 요청 횟수",
+    "uptime": "시스템 가동률",
+    "scraping_rate": "웹 스크래핑 성공률",
+    "usage_title": "모델별 토큰 소모량",
+    "report_title": "상세 리포트",
+    "scraping_title": "최근 웹 스크래핑 내역"
+  },
+  "chat": {
+    "placeholder": "질문을 입력하세요... (Enter 키로 전송)",
+    "send": "전송",
+    "thinking": "Thinking...",
+    "auto_fetch": "자동 웹 페칭",
+    "web_search": "웹 검색 강화",
+    "compress": "컨텍스트 압축 (Lingua)",
+    "temperature": "Temperature",
+    "reason_opts": "추론 옵션",
+    "sessions_title": "세션 관리",
+    "new_session": "+ 새 세션",
+    "import_btn": "이어쓰기",
+    "import_placeholder": "기존 세션 ID로 이어쓰기",
+    "delete_session": "세션 삭제",
+    "raw_api": "Raw API",
+    "model_auto_hint": "토큰 수와 의도에 맞춰 최적의 모델을 자동 선택합니다.",
+    "ref_sources": "참조 사이트 및 정보원",
+    "new_session_started": "새 대화 세션이 시작되었습니다.",
+    "session_restored": "세션이 복원되었습니다.",
+    "confirm_delete": "현재 세션을 영구 삭제하시겠습니까?"
+  },
+  "logs": {
+    "title": "시스템 이벤트 로그",
+    "refresh": "새로고침",
+    "clear": "로그 초기화",
+    "confirm_clear": "모든 시스템 로그를 초기화하시겠습니까?",
+    "cleared": "시스템 로그가 초기화되었습니다.",
+    "empty": "기록된 로그가 없습니다.",
+    "time": "시간",
+    "level": "레벨",
+    "category": "카테고리",
+    "message": "메시지",
+    "metadata": "메타데이터"
+  },
+  "settings": {
+    "api_mgmt": "API 리소스 관리",
+    "add_key": "키 추가",
+    "key_placeholder": "API Key 입력 (콤마로 다수 가능)",
+    "advanced": "고급 제어",
+    "sync_models": "전체 모델 정보 동기화",
+    "general": "일반 설정",
+    "language": "언어",
+    "debug_log": "디버그 통신 로그 활성화",
+    "save": "저장",
+    "settings_saved": "설정이 저장되었습니다.",
+    "tools": "로컬 에이전트 설치",
+    "tool_status_installed": "설치됨",
+    "tool_status_missing": "미설치",
+    "install_btn": "설치",
+    "install_openclaw_mllm_auto": "openclaw + mllm/auto 설치",
+    "installing": "설치 중... (최대 5분 소요)",
+    "install_success": "설치 완료",
+    "install_failed": "설치 실패",
+    "comm_log_title": "공급자 통신 로그 (디버그)",
+    "comm_log_disabled": "디버그 로그가 비활성화 되어 있습니다. 일반 설정에서 켜주세요.",
+    "comm_log_empty": "수집된 통신 로그가 없습니다.",
+    "comm_log_refresh": "새로고침",
+    "comm_log_clear": "초기화"
+  },
+  "onboarding": {
+    "welcome": "HydraLLM에 오신 것을 환영합니다",
+    "intro": "초기 설정을 진행합니다. 사용하실 모델을 선택하세요.",
+    "searching": "가용한 모델을 탐색 중입니다. 잠시만 기다려 주세요...",
+    "refresh_list": "목록 새로고침",
+    "save_start": "설정 완료 및 시작",
+    "tools_intro": "로컬 에이전트를 함께 설치하시겠습니까?",
+    "install_openclaw": "openclaw 설치",
+    "install_opencode": "opencode 설치",
+    "install_openclaw_mllm_auto": "openclaw + mllm/auto"
+  },
+  "common": {
+    "ok": "확인",
+    "cancel": "취소",
+    "language_ko": "한국어",
+    "language_en": "English"
+  }
+}

@@ -31,8 +31,7 @@
 │   ├── integration/              # gateway failover, auto-models, provider validation
 │   └── api/                      # FastAPI endpoint contract 테스트
 ├── static/                       # 통합 SPA (Playground + Dashboard)
-├── samples/                      # 요청 바디 샘플
-├── scripts/                      # analyze_logs.py, check_imports.py, run_final_test.py
+├── scripts/                      # analyze_logs.py (로그 분석 유틸리티)
 ├── examples/                     # cURL / SDK 사용 예시
 ├── pyproject.toml                # Poetry, ruff, mypy, pytest 설정
 └── .env                          # 공급자 키와 런타임 설정 (gitignore 처리됨)
@@ -49,6 +48,7 @@
 7. **세션 영속화** — `services/session_manager.py::SessionManager`가 SQLite(WAL)에 메시지와 파트를 저장하고, 포킹 및 compaction 임계값을 지원하며, 런타임 설정을 보관합니다.
 8. **통합 관리 UI** — `/ui`에서 playground, dashboard, 키 상태, 모델 카탈로그를 하나의 SPA로 제공하며, 모든 fetch 호출은 프록시 안정성을 위해 절대 URL을 사용합니다.
 9. **OpenAI API 호환** — 스트리밍 SSE(`chat.completion.chunk` + `[DONE]`) 포함 `/v1/chat/completions`.
+10. **웹 의도 키워드 점진 학습** — `services/keyword_store.py::KeywordStore`가 언어별(`ko`, `en`) 키워드를 JSON 파일(`data/web_keywords.{lang}.json`)로 영속화하고, `services/intent_classifier.py::IntentClassifier`가 임베딩 비교에 앞서 부분 문자열 매치를 수행합니다. `scripts/validate_flow.py`가 false negative 질의를 자동으로 `/v1/admin/intent/keywords/learn` 에 기록해 사전을 키워 나갑니다.
 
 ## API 표면
 
@@ -70,6 +70,9 @@
 | `POST` | `/v1/admin/keys` | 런타임 키 추가 (알려진 문제 참고) |
 | `GET`  | `/v1/admin/onboarding` | 온보딩 상태와 사용 가능 모델 |
 | `POST` | `/v1/admin/onboarding` | 온보딩 선택 저장 |
+| `GET`  | `/v1/admin/intent/keywords` | 언어별 웹 의도 키워드 목록 |
+| `POST` | `/v1/admin/intent/keywords` | `{lang,keywords[]}` 수동 키워드 등록 |
+| `POST` | `/v1/admin/intent/keywords/learn` | `{query}` false negative 질의에서 키워드 학습(LLM 추출 + 정규식 폴백) |
 
 루트 및 UI 경로:
 
@@ -78,6 +81,52 @@
 | `GET` | `/` | 서비스 배너 (`/docs`, `/openapi.json`, `/ui` 링크 제공) |
 | `GET` | `/ui` | 통합 관리 SPA (`static/index.html`) |
 | `GET` | `/ui/static/*` | 정적 자산 |
+
+## 설치
+
+### 1. Python 가상환경 준비 (권장)
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+> ⚠️ **pydantic v2 필수**: 이 프로젝트는 `pydantic>=2.5` 와 `pydantic-settings>=2.1` 를 요구합니다. 전역 `~/.local` 에 pydantic v1 이 남아 있으면 `ModuleNotFoundError: No module named 'pydantic._internal'` 이 발생하므로 반드시 가상환경을 사용하거나 `pip install --upgrade 'pydantic>=2.5'` 로 업그레이드하세요.
+
+### 2. 의존성 설치 (택 1)
+
+```bash
+# (A) pip
+pip install -r requirements.txt
+
+# (B) Poetry
+poetry install
+# (선택) 컨텍스트 압축 기능을 쓸 경우
+poetry install -E compression
+```
+
+### 3. Playwright 브라우저 바이너리 설치
+
+웹 스크래퍼(`services/scraper.py`) 가 Chromium 을 사용하므로 최초 1회 다운로드가 필요합니다.
+
+```bash
+python -m playwright install chromium
+```
+
+### 4. 환경 변수 설정
+
+```bash
+cp .env.example .env
+# .env 를 열어 GEMINI_KEYS, GROQ_KEYS, CEREBRAS_KEYS 등 필요한 값을 채웁니다.
+```
+
+### 5. 동작 확인
+
+```bash
+python main.py           # 기본 포트 8000 에서 기동
+curl http://127.0.0.1:8000/   # {"status":"online", ...}
+```
 
 ## 명령어
 
@@ -109,6 +158,7 @@ mypy src/
 - **로컬 에이전트** — `OLLAMA_BASE_URL`, `OPENCODE_BASE_URL`, `OPENCLAW_BASE_URL`
 - **기능 플래그** — `ENABLE_CONTEXT_COMPRESSION`, `ENABLE_AUTO_WEB_FETCH`, `WEB_CACHE_TTL_HOURS`
 - **관리자** — `ADMIN_API_KEY` (선택; 미설정 시 관리자 인증 비활성화)
+- **웹 의도 키워드 저장소** — `DATA_DIR`(기본 `data/`), `KEYWORD_EXTRACTION_MODEL`(Ollama 소형 LLM명; 미지정 시 정규식 폴백만 사용)
 
 전체 예시는 `.env.example`을 참고하세요. `.env`는 `.gitignore`에 포함되어 저장소에 커밋되지 않습니다.
 

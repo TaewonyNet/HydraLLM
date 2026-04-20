@@ -37,7 +37,7 @@ class GeminiAdapter(ILLMProvider):
         return 32768
 
     async def generate(self, request: ChatRequest, api_key: str) -> ChatResponse:
-        uploaded_files = []
+        uploaded_files: list[Any] = []
         try:
             genai.configure(api_key=api_key)
 
@@ -45,12 +45,13 @@ class GeminiAdapter(ILLMProvider):
                 await self.discover_models()
 
             if not request.messages:
-                raise ServiceUnavailableError("No messages provided in request")
+                err_msg = "No messages provided in request"
+                raise ServiceUnavailableError(err_msg)
 
             model_name = self._map_model_name(request.model)
 
-            system_instructions = []
-            history = []
+            system_instructions: list[str] = []
+            history: list[ChatMessage] = []
 
             for msg in request.messages:
                 if msg.role == "system":
@@ -81,6 +82,7 @@ class GeminiAdapter(ILLMProvider):
                             ChatMessage(
                                 role=msg.role,
                                 content=[{"type": "file", "file_handle": file_handle}],
+                                name=None,
                             )
                         )
                         continue
@@ -103,14 +105,12 @@ class GeminiAdapter(ILLMProvider):
                 f"Sending request to Gemini with model {model_name} (Files: {len(uploaded_files)})"
             )
 
-            tools = None
-            if request.has_search:
-                # Using standard 'google_search' tool name for native search retrieval
-                tools = [{"google_search": {}}]
-
+            # 네이티브 google_search 그라운딩은 현재 SDK 버전과 호환되지 않아
+            # tools 필드를 비우고, 웹 컨텍스트는 web_context_service 가 시스템
+            # 프롬프트에 주입한 결과를 그대로 사용한다.
             response = await model.generate_content_async(
                 contents=contents,
-                tools=tools,
+                tools=None,
                 generation_config=genai.types.GenerationConfig(
                     temperature=request.temperature
                     if request.temperature is not None
@@ -122,39 +122,47 @@ class GeminiAdapter(ILLMProvider):
 
             return self._convert_to_chat_response(response, model_name)
         except Exception as e:
-            logger.error(f"Gemini request failed: {str(e)}")
-            if "429" in str(e):
-                raise RateLimitError(f"Rate limit exceeded: {str(e)}") from e
-            raise ServiceUnavailableError(f"Unexpected error: {str(e)}") from e
+            err_str = str(e)
+            logger.error(f"Gemini request failed: {err_str}")
+
+            if "403" in err_str:
+                # 403 Forbidden is a project/key level failure, not a temporary rate limit
+                error_msg = f"Access denied (403): {err_str}"
+                raise ServiceUnavailableError(error_msg) from e
+
+            if "429" in err_str:
+                error_msg = f"Rate limit exceeded: {err_str}"
+                raise RateLimitError(error_msg) from e
+
+            error_msg = f"Unexpected error: {err_str}"
+            raise ServiceUnavailableError(error_msg) from e
         finally:
             pass
 
     def _map_model_name(self, request_model: str | None) -> str:
         if not request_model or request_model.lower() == "auto":
-            # 가용한 모델 중 가장 최신 버전 자동 선택
-            flash_models = [
-                m["id"] for m in self._discovered_models if "flash" in m["id"].lower()
+            flash_models: list[str] = [
+                str(m["id"])
+                for m in self._discovered_models
+                if "flash" in str(m["id"]).lower()
             ]
             if flash_models:
                 return sorted(flash_models, reverse=True)[0]
             return "gemini-2.5-flash"
 
-        # 입력값 정제 (접두사 제거 후 매칭 시도)
         input_clean = request_model.lower().replace("models/", "")
 
-        # 1. 정확한 ID 매칭
         for m in self._discovered_models:
-            m_id_clean = m["id"].lower().replace("models/", "")
+            m_id_clean = str(m["id"]).lower().replace("models/", "")
             if input_clean == m_id_clean:
-                return m["id"]
+                return str(m["id"])
 
-        # 2. 이름 기반 부분 매칭
         for m in self._discovered_models:
             if (
-                input_clean in m["id"].lower()
-                or input_clean in m.get("display_name", "").lower()
+                input_clean in str(m["id"]).lower()
+                or input_clean in str(m.get("display_name", "")).lower()
             ):
-                return m["id"]
+                return str(m["id"])
 
         return request_model
 
@@ -175,7 +183,9 @@ class GeminiAdapter(ILLMProvider):
             else:
                 for p in content:
                     if isinstance(p, dict) and p.get("type") == "file":
-                        parts.append(p.get("file_handle"))
+                        fh = p.get("file_handle")
+                        if fh is not None:
+                            parts.append(fh)
                     else:
                         parts.append(str(p))
 

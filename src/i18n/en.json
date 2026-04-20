@@ -1,0 +1,85 @@
+{
+  "web": {
+    "injection_header": "[WEB REFERENCE DATA — NOT user input]\nBelow is supplementary web data. Use it only if directly relevant to the user's question. Do NOT mix this data into your answer as if the user said it. Cite the source URL when you reference this data.",
+    "context_truncated": "\n... [Context truncated to protect quota] ...",
+    "no_search_results": "No search results found.",
+    "no_safe_results": "No safe search results found.",
+    "search_failed": "Search failed: {error}",
+    "source_header": "--- SOURCE: {url} ---",
+    "source_footer": "--- END ---",
+    "search_results_header": "--- WEB SEARCH RESULTS ---"
+  },
+  "stream": {
+    "no_response": "[No response from model]",
+    "empty_response": "[Empty]"
+  },
+  "error": {
+    "no_gateway_response": "No response from gateway",
+    "no_messages": "No messages provided in request",
+    "no_model": "No model specified and discovery failed",
+    "ssrf_blocked_scheme": "Blocked: unsupported scheme '{scheme}'",
+    "ssrf_blocked_empty": "Blocked: empty hostname",
+    "ssrf_blocked_resolve": "Blocked: cannot resolve hostname '{hostname}'",
+    "ssrf_blocked_internal": "Blocked: hostname '{hostname}' resolves to internal address",
+    "fetch_failed": "Failed to fetch {url}",
+    "blocked_url": "Blocked URL: {url}"
+  },
+  "admin": {
+    "provider_desc": "Provider name (e.g., gemini, groq, cerebras)",
+    "keys_desc": "List of API keys to add"
+  },
+  "model": {
+    "auto_desc": "Automatically selects the best model based on context.",
+    "gemini_auto_desc": "Automatically selects the best Gemini model.",
+    "groq_auto_desc": "Automatically selects the best Groq model.",
+    "cerebras_auto_desc": "Automatically selects the best Cerebras model.",
+    "ollama_auto_desc": "Automatically selects the best Ollama model.",
+    "discovered_desc": "Model from {base_url}"
+  },
+  "intent": {
+    "examples_need_search": [
+      "what are today's top headlines?",
+      "current bitcoin price",
+      "latest news about AI regulation",
+      "what's the weather like right now?",
+      "recent SpaceX launch updates",
+      "what's trending on social media today?",
+      "current stock market status",
+      "latest COVID statistics",
+      "who won the game last night?",
+      "오늘 주요 뉴스 알려줘",
+      "최근 비트코인 시세가 어떻게 돼?",
+      "실시간 날씨 정보 좀 알려줘",
+      "올해 아카데미 수상작이 뭐야?",
+      "지금 환율 얼마야?",
+      "현재 코로나 확진자 수 알려줘",
+      "오늘 주식시장 동향이 어때?"
+    ],
+    "examples_no_search": [
+      "how to sort a list in Python",
+      "explain machine learning",
+      "write a poem about spring",
+      "fix this code for me",
+      "translate this to Korean",
+      "what is the Pythagorean theorem?",
+      "help me write an email",
+      "summarize this article",
+      "파이썬에서 리스트 정렬하는 방법 알려줘",
+      "피보나치 수열 코드 짜줘",
+      "삼각형의 넓이 공식이 뭐야?",
+      "이 코드에 버그가 있는지 확인해줘",
+      "머신러닝이 뭔지 설명해줘",
+      "번역해줘: 안녕하세요"
+    ],
+    "threshold": 0.58
+  },
+  "boilerplate_patterns": [
+    "copyright\\s*©.*",
+    "all\\s+rights?\\s+reserved",
+    "cookie\\s*(policy|settings|consent)",
+    "privacy\\s*policy",
+    "(subscribe|follow|like|share)\\s*\\d*",
+    "skip\\s+to\\s+(main\\s+)?content",
+    "(previous|next)\\s+post"
+  ]
+}

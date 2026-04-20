@@ -1,0 +1,100 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "chat": "Playground",
+    "logs": "System Logs",
+    "settings": "Settings",
+    "resource_status": "Resource Availability"
+  },
+  "sidebar": {
+    "title": "Real-time Resource Status",
+    "loading": "Loading...",
+    "reprobe": "Re-probe Now",
+    "load_failed": "Failed to load"
+  },
+  "dashboard": {
+    "total_tokens": "Total Tokens",
+    "total_requests": "Total Requests",
+    "uptime": "System Uptime",
+    "scraping_rate": "Scraping Success Rate",
+    "usage_title": "Token Usage by Model",
+    "report_title": "Detailed Report",
+    "scraping_title": "Recent Web Scraping"
+  },
+  "chat": {
+    "placeholder": "Type your question... (Press Enter to send)",
+    "send": "Send",
+    "thinking": "Thinking...",
+    "auto_fetch": "Auto Web Fetching",
+    "web_search": "Web Search Boost",
+    "compress": "Context Compression (Lingua)",
+    "temperature": "Temperature",
+    "reason_opts": "Reasoning Options",
+    "sessions_title": "Session Management",
+    "new_session": "+ New Session",
+    "import_btn": "Resume",
+    "import_placeholder": "Resume an existing session by ID",
+    "delete_session": "Delete Session",
+    "raw_api": "Raw API",
+    "model_auto_hint": "Automatically selects the best model based on tokens and intent.",
+    "ref_sources": "Reference Sources",
+    "new_session_started": "A new conversation session has started.",
+    "session_restored": "Session restored.",
+    "confirm_delete": "Permanently delete the current session?"
+  },
+  "logs": {
+    "title": "System Event Logs",
+    "refresh": "Refresh",
+    "clear": "Clear Logs",
+    "confirm_clear": "Clear all system logs?",
+    "cleared": "System logs cleared.",
+    "empty": "No logs recorded.",
+    "time": "Time",
+    "level": "Level",
+    "category": "Category",
+    "message": "Message",
+    "metadata": "Metadata"
+  },
+  "settings": {
+    "api_mgmt": "API Resource Management",
+    "add_key": "Add Key",
+    "key_placeholder": "API key (comma-separated for multiple)",
+    "advanced": "Advanced",
+    "sync_models": "Sync All Model Information",
+    "general": "General",
+    "language": "Language",
+    "debug_log": "Enable debug communication log",
+    "save": "Save",
+    "settings_saved": "Settings saved.",
+    "tools": "Local Agent Installation",
+    "tool_status_installed": "Installed",
+    "tool_status_missing": "Not installed",
+    "install_btn": "Install",
+    "install_openclaw_mllm_auto": "Install openclaw + mllm/auto",
+    "installing": "Installing... (may take up to 5 min)",
+    "install_success": "Install complete",
+    "install_failed": "Install failed",
+    "comm_log_title": "Provider Communication Log (debug)",
+    "comm_log_disabled": "Debug log is disabled. Enable it under General settings.",
+    "comm_log_empty": "No communication logs captured yet.",
+    "comm_log_refresh": "Refresh",
+    "comm_log_clear": "Clear"
+  },
+  "onboarding": {
+    "welcome": "Welcome to HydraLLM",
+    "intro": "Let's set things up. Pick the models you'd like to use.",
+    "searching": "Discovering available models. Please wait...",
+    "refresh_list": "Refresh list",
+    "save_start": "Finish & Start",
+    "tools_intro": "Do you want to install local agents now?",
+    "install_openclaw": "Install openclaw",
+    "install_opencode": "Install opencode",
+    "install_openclaw_mllm_auto": "openclaw + mllm/auto"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "language_ko": "한국어",
+    "language_en": "English"
+  }
+}

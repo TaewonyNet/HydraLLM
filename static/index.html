@@ -73,40 +73,46 @@
 <body>
     <div id="bottom-modal">
         <span id="bottom-modal-msg">설정이 저장되었습니다.</span>
-        <button class="btn-ok" onclick="closeBottomModal()">확인</button>
+        <button class="btn-ok" data-i18n="common.ok" onclick="closeBottomModal()">확인</button>
     </div>
 
     <nav class="nav">
         <div class="nav-brand" onclick="showView('dashboard')">🐉 HydraLLM</div>
         <div class="nav-links">
-            <a class="nav-link active" onclick="showView('dashboard')">대시보드</a>
-            <a class="nav-link" onclick="showView('chat')">플레이그라운드</a>
-            <a class="nav-link" onclick="showView('logs')">시스템 로그</a>
-            <a class="nav-link" style="display:none;" onclick="showView('settings')">설정</a>
+            <a class="nav-link active" data-i18n="nav.dashboard" onclick="showView('dashboard')">대시보드</a>
+            <a class="nav-link" data-i18n="nav.chat" onclick="showView('chat')">플레이그라운드</a>
+            <a class="nav-link" data-i18n="nav.logs" onclick="showView('logs')">시스템 로그</a>
+            <a class="nav-link" data-i18n="nav.settings" onclick="showView('settings')">설정</a>
         </div>
-        <button onclick="toggleSidebar()" class="badge badge-info" style="border:none; cursor:pointer; padding:8px 15px;">리소스 가용성</button>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <select id="lang-select" onchange="setLang(this.value)" style="padding:6px; border-radius:4px; border:none; background:#222; color:white;">
+                <option value="ko">한국어</option>
+                <option value="en">English</option>
+            </select>
+            <button onclick="toggleSidebar()" class="badge badge-info" data-i18n="nav.resource_status" style="border:none; cursor:pointer; padding:8px 15px;">리소스 가용성</button>
+        </div>
     </nav>
 
     <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
     <div id="provider-sidebar">
         <h3 style="margin-top:0; display:flex; justify-content:space-between; align-items:center;">
-            실시간 리소스 상태
+            <span data-i18n="sidebar.title">실시간 리소스 상태</span>
             <button onclick="toggleSidebar()" style="background:none; border:none; cursor:pointer; font-size:1.5rem;">&times;</button>
         </h3>
-        <div id="sidebar-content"><p class="loading">조회 중...</p></div>
-        <button onclick="probeKeys()" style="width:100%; margin-top:20px; padding:12px; background:var(--success); color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">즉시 재검증 실행</button>
+        <div id="sidebar-content"><p class="loading" data-i18n="sidebar.loading">조회 중...</p></div>
+        <button onclick="probeKeys()" data-i18n="sidebar.reprobe" style="width:100%; margin-top:20px; padding:12px; background:var(--success); color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">즉시 재검증 실행</button>
     </div>
 
     <div class="container">
         <div id="view-dashboard" class="view active">
             <div class="grid">
-                <div class="card"><div class="stat-box"><div class="stat-label">누적 토큰 사용량</div><div id="stat-tokens" class="stat-value">0</div></div></div>
-                <div class="card"><div class="stat-box"><div class="stat-label">총 요청 횟수</div><div id="stat-requests" class="stat-value">0</div></div></div>
-                <div class="card"><div class="stat-box"><div class="stat-label">시스템 가동률</div><div id="stat-health" class="stat-value">-%</div></div></div>
-                <div class="card"><div class="stat-box"><div class="stat-label">웹 스크래핑 성공률</div><div id="stat-scraping" class="stat-value">-%</div></div></div>
+                <div class="card"><div class="stat-box"><div class="stat-label" data-i18n="dashboard.total_tokens">누적 토큰 사용량</div><div id="stat-tokens" class="stat-value">0</div></div></div>
+                <div class="card"><div class="stat-box"><div class="stat-label" data-i18n="dashboard.total_requests">총 요청 횟수</div><div id="stat-requests" class="stat-value">0</div></div></div>
+                <div class="card"><div class="stat-box"><div class="stat-label" data-i18n="dashboard.uptime">시스템 가동률</div><div id="stat-health" class="stat-value">-%</div></div></div>
+                <div class="card"><div class="stat-box"><div class="stat-label" data-i18n="dashboard.scraping_rate">웹 스크래핑 성공률</div><div id="stat-scraping" class="stat-value">-%</div></div></div>
             </div>
             <div class="card">
-                <h3>모델별 토큰 소모량</h3>
+                <h3 data-i18n="dashboard.usage_title">모델별 토큰 소모량</h3>
                 <canvas id="usageChart" height="100"></canvas>
             </div>
             <div id="detailed-usage-container"></div>
@@ -125,34 +131,37 @@
                     </div>
                     <div id="chat-history"></div>
                     <div class="chat-input-area">
-                        <input type="text" id="chat-input" placeholder="질문을 입력하세요... (Enter 키로 전송)" onkeypress="if(event.key==='Enter') sendChatMessage()" style="flex:1; padding:12px; border:1px solid #ddd; border-radius:8px; font-size:1rem;">
-                        <button id="send-btn" onclick="sendChatMessage()" style="padding:0 30px; background:var(--primary); color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">전송</button>
+                        <input type="text" id="chat-input" data-i18n-placeholder="chat.placeholder" placeholder="질문을 입력하세요... (Enter 키로 전송)" onkeypress="if(event.key==='Enter') sendChatMessage()" style="flex:1; padding:12px; border:1px solid #ddd; border-radius:8px; font-size:1rem;">
+                        <button id="send-btn" onclick="sendChatMessage()" data-i18n="chat.send" style="padding:0 30px; background:var(--primary); color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">전송</button>
                     </div>
                 </div>
                 <div class="chat-sidebar">
                     <div class="card">
-                        <h3 style="margin-top:0;">추론 옵션</h3>
+                        <h3 style="margin-top:0;" data-i18n="chat.reason_opts">추론 옵션</h3>
                         <div style="display:flex; flex-direction:column; gap:12px; font-size:0.85rem;">
-                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="auto-fetch-check" checked> 자동 웹 페칭</label>
-                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="search-check"> 웹 검색 강화</label>
-                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="compress-check" checked> 컨텍스트 압축 (Lingua)</label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="auto-fetch-check" checked><span data-i18n="chat.auto_fetch">자동 웹 페칭</span></label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="search-check"><span data-i18n="chat.web_search">웹 검색 강화</span></label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="compress-check" checked><span data-i18n="chat.compress">컨텍스트 압축 (Lingua)</span></label>
                             <div style="margin-top:5px;">
-                                <label style="display:block; margin-bottom:5px;">Temperature: <span id="temp-val">0.7</span></label>
+                                <label style="display:block; margin-bottom:5px;"><span data-i18n="chat.temperature">Temperature</span>: <span id="temp-val">0.7</span></label>
                                 <input type="range" id="temp-input" value="0.7" step="0.1" min="0" max="2" oninput="document.getElementById('temp-val').innerText=this.value" style="width:100%;">
                             </div>
                         </div>
                     </div>
                     <div class="card">
-                        <h3 style="margin-top:0;">세션 관리</h3>
-                        <button onclick="createNewSession()" style="width:100%; background:var(--success); color:white; border:none; padding:10px; border-radius:6px; cursor:pointer; font-weight:bold; margin-bottom:10px;">+ New Session</button>
+                        <h3 style="margin-top:0;" data-i18n="chat.sessions_title">세션 관리</h3>
+                        <button onclick="createNewSession()" data-i18n="chat.new_session" style="width:100%; background:var(--success); color:white; border:none; padding:10px; border-radius:6px; cursor:pointer; font-weight:bold; margin-bottom:10px;">+ New Session</button>
                         <div id="session-list" style="max-height:250px; overflow-y:auto; border:1px solid #f0f0f0; border-radius:6px;"></div>
-                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:5px; margin-top:10px;">
-                            <button onclick="exportSession()" style="padding:5px; font-size:0.75rem; background:var(--dark);">내보내기</button>
-                            <button onclick="deleteCurrentSession()" style="padding:5px; font-size:0.75rem; background:var(--danger);">세션 삭제</button>
+                        <div style="display:flex; gap:6px; margin-top:10px;">
+                            <input type="text" id="import-session-input" data-i18n-placeholder="chat.import_placeholder" placeholder="기존 세션 ID로 이어쓰기" style="flex:1; padding:6px; font-size:0.75rem; border:1px solid #ddd; border-radius:4px;">
+                            <button onclick="importSession()" data-i18n="chat.import_btn" style="padding:5px 10px; font-size:0.75rem; background:var(--primary); color:white; border:none; border-radius:4px; cursor:pointer;">이어쓰기</button>
+                        </div>
+                        <div style="margin-top:8px;">
+                            <button onclick="deleteCurrentSession()" data-i18n="chat.delete_session" style="width:100%; padding:6px; font-size:0.75rem; background:var(--danger); color:white; border:none; border-radius:4px; cursor:pointer;">현재 세션 삭제</button>
                         </div>
                     </div>
                     <div class="card">
-                        <h3 style="margin-top:0;">Raw API</h3>
+                        <h3 style="margin-top:0;" data-i18n="chat.raw_api">Raw API</h3>
                         <pre class="raw-json" id="raw-response">{}</pre>
                     </div>
                 </div>
@@ -162,11 +171,14 @@
         <div id="view-logs" class="view">
             <div class="card">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                    <h3 style="margin:0;">시스템 이벤트 로그</h3>
-                    <button onclick="loadLogs()" class="badge badge-info" style="border:none; cursor:pointer;">새로고침</button>
+                    <h3 style="margin:0;" data-i18n="logs.title">시스템 이벤트 로그</h3>
+                    <div style="display:flex; gap:8px;">
+                        <button onclick="clearSystemLogs()" class="badge badge-danger" data-i18n="logs.clear" style="border:none; cursor:pointer; padding:6px 12px;">로그 초기화</button>
+                        <button onclick="loadLogs()" class="badge badge-info" data-i18n="logs.refresh" style="border:none; cursor:pointer;">새로고침</button>
+                    </div>
                 </div>
                 <table id="logs-table">
-                    <thead><tr><th>시간</th><th>레벨</th><th>카테고리</th><th>메시지</th><th>메타데이터</th></tr></thead>
+                    <thead><tr><th data-i18n="logs.time">시간</th><th data-i18n="logs.level">레벨</th><th data-i18n="logs.category">카테고리</th><th data-i18n="logs.message">메시지</th><th data-i18n="logs.metadata">메타데이터</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
@@ -174,25 +186,75 @@
 
         <div id="view-settings" class="view">
             <div class="card">
-                <h3>API 리소스 관리</h3>
+                <h3 data-i18n="settings.general">일반 설정</h3>
+                <div style="display:grid; grid-template-columns:200px 1fr; gap:15px 25px; align-items:center; margin-top:15px; max-width:600px;">
+                    <label data-i18n="settings.language">언어</label>
+                    <select id="settings-lang-select" style="padding:8px; border:1px solid #ddd; border-radius:4px; width:200px;">
+                        <option value="ko">한국어</option>
+                        <option value="en">English</option>
+                    </select>
+                    <label data-i18n="settings.debug_log">디버그 통신 로그 활성화</label>
+                    <label class="switch" style="display:flex; align-items:center; gap:10px;">
+                        <input type="checkbox" id="settings-debug-check">
+                        <span id="settings-debug-label" style="font-size:0.85rem; color:#666;">off</span>
+                    </label>
+                </div>
+                <div style="margin-top:20px;">
+                    <button onclick="saveGeneralSettings()" data-i18n="settings.save" style="padding:10px 24px; background:var(--primary); color:white; border:none; border-radius:6px; cursor:pointer;">저장</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3 data-i18n="settings.tools">로컬 에이전트 설치</h3>
+                <div id="installer-status" style="display:flex; flex-direction:column; gap:12px; margin-top:15px;"></div>
+                <div style="margin-top:15px; display:flex; gap:10px; flex-wrap:wrap;">
+                    <button onclick="installTool('opencode')" data-i18n-prefix="opencode:" style="padding:10px 20px; background:var(--dark); color:white; border:none; border-radius:6px; cursor:pointer;">opencode <span data-i18n="settings.install_btn">설치</span></button>
+                    <button onclick="installTool('openclaw')" style="padding:10px 20px; background:var(--dark); color:white; border:none; border-radius:6px; cursor:pointer;">openclaw <span data-i18n="settings.install_btn">설치</span></button>
+                    <button onclick="installTool('openclaw-mllm-auto')" data-i18n="settings.install_openclaw_mllm_auto" style="padding:10px 20px; background:var(--success); color:white; border:none; border-radius:6px; cursor:pointer;">openclaw + mllm/auto 설치</button>
+                </div>
+                <div id="installer-log" style="margin-top:10px; font-family:monospace; font-size:0.75rem; color:#666; white-space:pre-wrap;"></div>
+            </div>
+
+            <div class="card">
+                <h3 data-i18n="settings.api_mgmt">API 리소스 관리</h3>
                 <div style="display:flex; gap:10px; margin-top:15px;">
                     <select id="key-provider" style="width:120px; padding:10px;"><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="cerebras">Cerebras</option></select>
-                    <input type="text" id="new-key-input" placeholder="API Key 입력 (콤마로 다수 가능)" style="flex:1; padding:10px; border:1px solid #ddd; border-radius:4px;">
-                    <button onclick="addKeys()" style="background:var(--success); color:white; border:none; padding:10px 20px; border-radius:4px; cursor:pointer;">키 추가</button>
+                    <input type="text" id="new-key-input" data-i18n-placeholder="settings.key_placeholder" placeholder="API Key 입력 (콤마로 다수 가능)" style="flex:1; padding:10px; border:1px solid #ddd; border-radius:4px;">
+                    <button onclick="addKeys()" data-i18n="settings.add_key" style="background:var(--success); color:white; border:none; padding:10px 20px; border-radius:4px; cursor:pointer;">키 추가</button>
                 </div>
                 <hr style="margin:30px 0; border:none; border-top:1px solid #eee;">
-                <h3>고급 제어</h3>
-                <button onclick="refreshModelDiscovery()" style="padding:12px 25px; background:var(--dark); color:white; border:none; border-radius:6px; cursor:pointer;">전체 모델 정보 동기화</button>
+                <h3 data-i18n="settings.advanced">고급 제어</h3>
+                <button onclick="refreshModelDiscovery()" data-i18n="settings.sync_models" style="padding:12px 25px; background:var(--dark); color:white; border:none; border-radius:6px; cursor:pointer;">전체 모델 정보 동기화</button>
+            </div>
+
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0;" data-i18n="settings.comm_log_title">공급자 통신 로그 (디버그)</h3>
+                    <div style="display:flex; gap:8px;">
+                        <button onclick="loadCommLogs()" data-i18n="settings.comm_log_refresh" class="badge badge-info" style="border:none; cursor:pointer;">새로고침</button>
+                        <button onclick="clearCommLogs()" data-i18n="settings.comm_log_clear" class="badge badge-danger" style="border:none; cursor:pointer;">초기화</button>
+                    </div>
+                </div>
+                <div id="comm-log-table" style="margin-top:15px; font-size:0.75rem; font-family:monospace; max-height:400px; overflow:auto;"></div>
             </div>
         </div>
     </div>
 
     <div id="onboarding-overlay">
         <div class="onboarding-modal">
-            <h2>Welcome to HydraLLM</h2>
-            <p>초기 설정을 진행합니다. 사용하실 모델을 선택하세요.</p>
+            <h2 data-i18n="onboarding.welcome">Welcome to HydraLLM</h2>
+            <p data-i18n="onboarding.intro">초기 설정을 진행합니다. 사용하실 모델을 선택하세요.</p>
             <div id="onboarding-content" style="max-height:400px; overflow-y:auto; margin:20px 0; border:1px solid #eee; padding:10px; border-radius:8px;"></div>
-            <button onclick="saveOnboarding()" style="width:100%; padding:15px; background:var(--success); color:white; border:none; border-radius:8px; cursor:pointer; font-size:1.1rem; font-weight:bold;">설정 완료 및 시작</button>
+            <div style="margin:15px 0; padding:15px; background:#f8f9fa; border-radius:8px;">
+                <p style="margin:0 0 10px 0; font-weight:bold;" data-i18n="onboarding.tools_intro">로컬 에이전트를 함께 설치하시겠습니까?</p>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button type="button" onclick="installTool('opencode')" data-i18n="onboarding.install_opencode" style="padding:8px 14px; background:var(--dark); color:white; border:none; border-radius:6px; cursor:pointer;">opencode 설치</button>
+                    <button type="button" onclick="installTool('openclaw')" data-i18n="onboarding.install_openclaw" style="padding:8px 14px; background:var(--dark); color:white; border:none; border-radius:6px; cursor:pointer;">openclaw 설치</button>
+                    <button type="button" onclick="installTool('openclaw-mllm-auto')" data-i18n="onboarding.install_openclaw_mllm_auto" style="padding:8px 14px; background:var(--success); color:white; border:none; border-radius:6px; cursor:pointer;">openclaw + mllm/auto</button>
+                </div>
+                <div id="onboarding-install-log" style="margin-top:10px; font-family:monospace; font-size:0.75rem; color:#666;"></div>
+            </div>
+            <button onclick="saveOnboarding()" data-i18n="onboarding.save_start" style="width:100%; padding:15px; background:var(--success); color:white; border:none; border-radius:8px; cursor:pointer; font-size:1.1rem; font-weight:bold;">설정 완료 및 시작</button>
         </div>
     </div>
 
@@ -200,6 +262,62 @@
         let availableModels = [];
         let currentSessionId = localStorage.getItem('hydra_session_id');
         let usageChart = null;
+        let i18nCache = {};
+        let currentLang = localStorage.getItem('hydra_lang') || 'ko';
+
+        async function loadI18n(lang) {
+            if (i18nCache[lang]) return i18nCache[lang];
+            try {
+                const res = await fetch(`/ui/static/i18n/${lang}.json`);
+                const data = await res.json();
+                i18nCache[lang] = data;
+                return data;
+            } catch (e) { console.error('i18n load failed', e); return {}; }
+        }
+
+        function i18nLookup(dict, key) {
+            return key.split('.').reduce((a, k) => (a && a[k] != null) ? a[k] : null, dict);
+        }
+
+        function t(key) {
+            const dict = i18nCache[currentLang] || {};
+            const val = i18nLookup(dict, key);
+            if (val != null) return val;
+            const fallback = i18nLookup(i18nCache['ko'] || {}, key);
+            return fallback != null ? fallback : key;
+        }
+
+        async function applyI18n() {
+            await loadI18n(currentLang);
+            if (currentLang !== 'ko') await loadI18n('ko');
+            document.documentElement.lang = currentLang;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                const val = t(key);
+                if (val) el.textContent = val;
+            });
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.getAttribute('data-i18n-placeholder');
+                const val = t(key);
+                if (val) el.setAttribute('placeholder', val);
+            });
+            const selNav = document.getElementById('lang-select');
+            if (selNav) selNav.value = currentLang;
+            const selSettings = document.getElementById('settings-lang-select');
+            if (selSettings) selSettings.value = currentLang;
+        }
+
+        async function setLang(lang) {
+            currentLang = lang;
+            localStorage.setItem('hydra_lang', lang);
+            try {
+                await fetch('/v1/admin/settings', {
+                    method: 'PUT', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ locale: lang })
+                });
+            } catch (e) { /* ignore server-side sync errors */ }
+            await applyI18n();
+        }
 
         function showView(name) {
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -218,6 +336,7 @@
             if (name === 'dashboard') loadDashboard();
             if (name === 'logs') loadLogs();
             if (name === 'chat') { loadModels(); loadSessions(); }
+            if (name === 'settings') { loadGeneralSettings(); loadCommLogs(); }
         }
 
         function toggleSidebar() {
@@ -321,7 +440,8 @@
             try {
                 const res = await fetch('http://localhost:8000/v1/admin/status');
                 const data = await res.json();
-                const providers = data.status.providers || {};
+                // gateway.get_status() 는 최상위에 providers 를 둔다 (data.status 는 문자열).
+                const providers = data.providers || {};
                 const keyStats = data.key_statistics || {};
                 let html = '';
                 for (const [name, info] of Object.entries(providers)) {
@@ -439,7 +559,7 @@
             currentSessionId = data.session_id; localStorage.setItem('hydra_session_id', currentSessionId);
             document.getElementById('chat-history').innerHTML = '';
             document.getElementById('current-session-display').textContent = 'SID: ' + currentSessionId.substring(0,10);
-            appendMsg('system', '새 대화 세션이 시작되었습니다.');
+            appendMsg('system', t('chat.new_session_started'));
             loadSessions();
         }
 
@@ -454,9 +574,67 @@
         }
 
         async function switchSession(sid) {
-            currentSessionId = sid; localStorage.setItem('hydra_session_id', sid);
-            document.getElementById('chat-history').innerHTML = ''; appendMsg('system', '세션이 복원되었습니다.');
+            currentSessionId = sid;
+            localStorage.setItem('hydra_session_id', sid);
+            document.getElementById('chat-history').innerHTML = '';
+            document.getElementById('current-session-display').textContent = 'SID: ' + sid.substring(0, 10);
+            appendMsg('system', t('chat.session_restored') || '세션이 복원되었습니다.');
+            await restoreSessionMessages(sid);
             loadSessions();
+        }
+
+        async function restoreSessionMessages(sid) {
+            try {
+                const res = await fetch(`/v1/admin/sessions/${sid}/messages`);
+                if (!res.ok) return;
+                const messages = await res.json();
+                if (!Array.isArray(messages)) return;
+                for (const m of messages) {
+                    if (!m.content) continue;
+                    const role = m.role === 'user' ? 'user'
+                        : (m.role === 'assistant' ? 'assistant' : 'system');
+                    const dataShim = (m.parts && m.parts.length)
+                        ? { choices: [{ message: { parts: m.parts } }] }
+                        : null;
+                    appendMsg(role, m.content, dataShim);
+                }
+            } catch (e) {
+                console.error('session restore failed', e);
+            }
+        }
+
+        async function importSession() {
+            const input = document.getElementById('import-session-input');
+            const sid = (input && input.value || '').trim();
+            if (!sid) { showBottomModal('세션 ID를 입력하세요.'); return; }
+            try {
+                const res = await fetch('/v1/admin/sessions/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sid })
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showBottomModal('실패: ' + (err.detail || '세션을 찾을 수 없습니다.'));
+                    return;
+                }
+                input.value = '';
+                await switchSession(sid);
+                showBottomModal(t('chat.session_restored') || '세션이 복원되었습니다.');
+            } catch (e) {
+                showBottomModal('실패: ' + e.message);
+            }
+        }
+
+        async function clearSystemLogs() {
+            if (!confirm(t('logs.confirm_clear') || '모든 시스템 로그를 초기화하시겠습니까?')) return;
+            try {
+                await fetch('/v1/admin/logs/clear', { method: 'POST' });
+                loadLogs();
+                showBottomModal(t('logs.cleared') || '시스템 로그가 초기화되었습니다.');
+            } catch (e) {
+                showBottomModal('실패: ' + e.message);
+            }
         }
 
         async function loadLogs() {
@@ -483,13 +661,8 @@
 
         async function refreshModelDiscovery() { await fetch('http://localhost:8000/v1/admin/refresh-models', { method: 'POST' }); showBottomModal('모델 정보 동기화 완료'); loadModels(); }
 
-        function exportSession() {
-            const blob = new Blob([JSON.stringify({session_id: currentSessionId, export_at: new Date()})], {type: 'application/json'});
-            const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=`session_${currentSessionId}.json`; a.click();
-        }
-
         async function deleteCurrentSession() {
-            if (!confirm('현재 세션을 영구 삭제하시겠습니까?')) return;
+            if (!confirm(t('chat.confirm_delete'))) return;
             await fetch(`http://localhost:8000/v1/admin/sessions/${currentSessionId}`, { method: 'DELETE' });
             localStorage.removeItem('hydra_session_id'); createNewSession();
         }
@@ -512,13 +685,111 @@
 
         async function saveOnboarding() {
             const enabled = Array.from(document.querySelectorAll('input[name="model-select"]:checked')).map(i => i.value);
-            await fetch('http://localhost:8000/v1/admin/onboarding', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ enabled_models: enabled }) });
+            await fetch('/v1/admin/onboarding', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ enabled_models: enabled }) });
             const overlay = document.getElementById('onboarding-overlay'); overlay.classList.remove('active'); setTimeout(() => overlay.style.display = 'none', 500);
-            showBottomModal('설정이 완료되었습니다.'); loadModels();
+            showBottomModal(t('settings.settings_saved')); loadModels();
         }
 
-        window.onload = () => {
-            if (!currentSessionId) createNewSession();
+        async function loadGeneralSettings() {
+            try {
+                const res = await fetch('/v1/admin/settings');
+                const data = await res.json();
+                if (data.locale) {
+                    document.getElementById('settings-lang-select').value = data.locale;
+                }
+                const debug = !!data.debug_comm_log;
+                document.getElementById('settings-debug-check').checked = debug;
+                document.getElementById('settings-debug-label').textContent = debug ? 'on' : 'off';
+            } catch (e) { console.error('settings load failed', e); }
+            try {
+                const res2 = await fetch('/v1/admin/install/status');
+                const data2 = await res2.json();
+                const container = document.getElementById('installer-status');
+                container.innerHTML = Object.entries(data2).map(([name, s]) => {
+                    const label = s.installed ? t('settings.tool_status_installed') : t('settings.tool_status_missing');
+                    const badge = s.installed ? 'badge-success' : 'badge-danger';
+                    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px; border:1px solid #eee; border-radius:6px;"><div><strong>${name}</strong> <span class="badge ${badge}">${label}</span>${s.version ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${s.version}</div>` : ''}</div><div style="font-family:monospace; font-size:0.7rem; color:#888;">${s.path || ''}</div></div>`;
+                }).join('');
+            } catch (e) { console.error('install status failed', e); }
+        }
+
+        async function saveGeneralSettings() {
+            const locale = document.getElementById('settings-lang-select').value;
+            const debug = document.getElementById('settings-debug-check').checked;
+            try {
+                await fetch('/v1/admin/settings', {
+                    method: 'PUT', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ locale, debug_comm_log: debug })
+                });
+                currentLang = locale;
+                localStorage.setItem('hydra_lang', locale);
+                await applyI18n();
+                document.getElementById('settings-debug-label').textContent = debug ? 'on' : 'off';
+                showBottomModal(t('settings.settings_saved'));
+            } catch (e) { showBottomModal('Error: ' + e.message); }
+        }
+
+        async function installTool(tool) {
+            const log = document.getElementById('installer-log') || document.getElementById('onboarding-install-log');
+            if (log) log.textContent = `[${tool}] ${t('settings.installing')}`;
+            try {
+                const res = await fetch(`/v1/admin/install/${tool}`, { method: 'POST' });
+                const data = await res.json();
+                const msg = data.success ? t('settings.install_success') : t('settings.install_failed');
+                if (log) log.textContent = `[${tool}] ${msg}\n${data.message || ''}`;
+                showBottomModal(`[${tool}] ${msg}`);
+                if (document.getElementById('view-settings').classList.contains('active')) {
+                    loadGeneralSettings();
+                }
+            } catch (e) {
+                if (log) log.textContent = `[${tool}] ERROR ${e.message}`;
+                showBottomModal(`[${tool}] ${t('settings.install_failed')}`);
+            }
+        }
+
+        async function loadCommLogs() {
+            const container = document.getElementById('comm-log-table');
+            try {
+                const res = await fetch('/v1/admin/comm-logs?limit=200');
+                const data = await res.json();
+                if (!data.enabled) {
+                    container.innerHTML = `<div style="padding:15px; color:#888;">${t('settings.comm_log_disabled')}</div>`;
+                    return;
+                }
+                if (!data.entries || data.entries.length === 0) {
+                    container.innerHTML = `<div style="padding:15px; color:#888;">${t('settings.comm_log_empty')}</div>`;
+                    return;
+                }
+                container.innerHTML = data.entries.slice().reverse().map(e => {
+                    const ts = new Date(e.ts * 1000).toLocaleTimeString();
+                    const color = e.direction === 'request' ? '#1565c0' : '#155724';
+                    return `<div style="border-bottom:1px dashed #ddd; padding:6px 4px;"><span style="color:${color}; font-weight:bold;">[${e.direction}]</span> <span style="color:#666;">${ts}</span> <strong>${e.provider}</strong><pre style="margin:4px 0 0 0; white-space:pre-wrap; font-size:0.7rem;">${JSON.stringify(e.payload, null, 2)}</pre></div>`;
+                }).join('');
+            } catch (e) { container.innerHTML = `<div style="color:red;">${e.message}</div>`; }
+        }
+
+        async function clearCommLogs() {
+            await fetch('/v1/admin/comm-logs', { method: 'DELETE' });
+            loadCommLogs();
+        }
+
+        window.onload = async () => {
+            await applyI18n();
+            try {
+                const res = await fetch('/v1/admin/settings');
+                const s = await res.json();
+                if (s.locale && s.locale !== currentLang) {
+                    currentLang = s.locale;
+                    localStorage.setItem('hydra_lang', s.locale);
+                    await applyI18n();
+                }
+            } catch (e) {}
+            if (!currentSessionId) {
+                createNewSession();
+            } else {
+                document.getElementById('current-session-display').textContent = 'SID: ' + currentSessionId.substring(0, 10);
+                restoreSessionMessages(currentSessionId);
+            }
             setTimeout(loadSessions, 0); setTimeout(loadModels, 100); setTimeout(loadDashboard, 200); setTimeout(checkOnboarding, 500);
         };
     </script>

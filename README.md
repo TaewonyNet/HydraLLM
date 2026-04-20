@@ -31,8 +31,7 @@
 │   ├── integration/              # gateway failover, auto-models, provider validation
 │   └── api/                      # FastAPI endpoint contract tests
 ├── static/                       # Unified SPA (Playground + Dashboard)
-├── samples/                      # Request body samples
-├── scripts/                      # analyze_logs.py, check_imports.py, run_final_test.py
+├── scripts/                      # analyze_logs.py (log analysis utility)
 ├── examples/                     # cURL / SDK usage examples
 ├── pyproject.toml                # Poetry, ruff, mypy, pytest configuration
 └── .env                          # Provider keys and runtime settings (gitignored)
@@ -49,6 +48,7 @@
 7. **Session Persistence** — `services/session_manager.py::SessionManager` stores messages and parts in SQLite (WAL), supports forking and compaction thresholds, and holds runtime settings.
 8. **Unified Admin UI** — Single SPA at `/ui` combining playground, dashboard, key status, and model catalogue; all fetches use absolute URLs for proxy stability.
 9. **OpenAI API Compatibility** — `/v1/chat/completions` including streaming SSE (`chat.completion.chunk` + `[DONE]`).
+10. **Incremental Web-Intent Keyword Learning** — `services/keyword_store.py::KeywordStore` persists per-language (`ko`, `en`) keywords to JSON files (`data/web_keywords.{lang}.json`); `services/intent_classifier.py::IntentClassifier` substring-matches them before falling back to embedding similarity. `scripts/validate_flow.py` automatically registers false-negative queries to `/v1/admin/intent/keywords/learn` to grow the lexicon.
 
 ## API Surface
 
@@ -70,6 +70,9 @@ All endpoints are mounted under `/v1` via `src/api/v1/endpoints.py`.
 | `POST` | `/v1/admin/keys` | Add runtime keys (see Known Issues) |
 | `GET`  | `/v1/admin/onboarding` | Onboarding status + available models |
 | `POST` | `/v1/admin/onboarding` | Save onboarding choices |
+| `GET`  | `/v1/admin/intent/keywords` | List web-intent keywords per language |
+| `POST` | `/v1/admin/intent/keywords` | `{lang,keywords[]}` manual keyword registration |
+| `POST` | `/v1/admin/intent/keywords/learn` | `{query}` learn keywords from a false-negative query (LLM extraction + regex fallback) |
 
 Plus the root and UI routes:
 
@@ -78,6 +81,52 @@ Plus the root and UI routes:
 | `GET` | `/` | Service banner (links to `/docs`, `/openapi.json`, `/ui`) |
 | `GET` | `/ui` | Unified admin SPA (`static/index.html`) |
 | `GET` | `/ui/static/*` | Static assets |
+
+## Installation
+
+### 1. Create a virtual environment (recommended)
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+> ⚠️ **pydantic v2 required**: this project needs `pydantic>=2.5` and `pydantic-settings>=2.1`. If pydantic v1 is present in `~/.local`, you will see `ModuleNotFoundError: No module named 'pydantic._internal'`. Use a venv, or upgrade with `pip install --upgrade 'pydantic>=2.5'`.
+
+### 2. Install dependencies (pick one)
+
+```bash
+# (A) pip
+pip install -r requirements.txt
+
+# (B) Poetry
+poetry install
+# (optional) enable the context-compression extra
+poetry install -E compression
+```
+
+### 3. Install Playwright browsers
+
+The web scraper (`services/scraper.py`) drives Chromium, so a one-time download is required.
+
+```bash
+python -m playwright install chromium
+```
+
+### 4. Configure environment
+
+```bash
+cp .env.example .env
+# edit .env to set GEMINI_KEYS, GROQ_KEYS, CEREBRAS_KEYS, etc.
+```
+
+### 5. Smoke test
+
+```bash
+python main.py           # starts on port 8000
+curl http://127.0.0.1:8000/   # {"status":"online", ...}
+```
 
 ## Commands
 
@@ -109,30 +158,16 @@ Key variables:
 - **Local agents** — `OLLAMA_BASE_URL`, `OPENCODE_BASE_URL`, `OPENCLAW_BASE_URL`
 - **Features** — `ENABLE_CONTEXT_COMPRESSION`, `ENABLE_AUTO_WEB_FETCH`, `WEB_CACHE_TTL_HOURS`
 - **Admin** — `ADMIN_API_KEY` (optional; unset disables admin auth)
+- **Web-intent keyword store** — `DATA_DIR` (default `data/`), `KEYWORD_EXTRACTION_MODEL` (Ollama small LLM name; regex fallback only when unset)
 
 See `.env.example` for the full list with example values. `.env` is listed in `.gitignore` and must not be committed.
 
-## Known Issues (validated 2026-04-15)
+## Known Issues (validated 2026-04-16)
 
-The following are tracked and intentionally left uncorrected in this documentation pass. Run details live in `TROUBLESHOOTING.ko.md` (Korean primary) and `TROUBLESHOOTING.md` (English summary), sections 11 through 14.
-
-- **pytest**: 2 failed / 70 passed.
-  - `tests/integration/test_integration.py::TestIntegration::test_admin_keys_endpoint` — `POST /v1/admin/keys` returns `422` because the endpoint signature (`provider: str, keys: list[str] = Body(...)`) makes `provider` a query parameter, while the test sends both fields in the JSON body.
-  - `tests/integration/test_auto_models_functionality.py::test_auto_models_functionality` — the final local fallback calls `OpenAICompatAdapter` at `OLLAMA_BASE_URL` with the first discovered model, which can be an embedding model such as `bge-m3:latest`; Ollama then rejects the chat request with `400 does not support chat`.
-  - unit + api tests (63 total) all pass; the other integration tests pass but `test_auto_models.py` is slow because it performs live LLM calls.
-- **mypy**: 35 errors across 10 files.
-  - `services/admin_service.py:49` — `AdminService.delete_session` calls `session_manager.delete_session`, but neither `ISessionManager` nor the concrete `SessionManager` defines that method today; only `clear_session` and `fork_session` exist. Calling `DELETE /v1/admin/sessions/{id}` will raise an `AttributeError` at runtime until the interface and the concrete class are aligned.
-  - `services/analyzer.py:104` and `adapters/providers/gemini.py:81` — spurious "missing named argument" reports on `RoutingDecision` / `ChatMessage` because no Pydantic-v2 mypy plugin is configured; the fields do carry defaults at runtime.
-  - `services/gateway.py:211,214` — type narrowing for `all_parts` elements (`dict | BaseModel`) and `msg.model_extra` assignment is not preserved through the current `dict[str, Any]` typing.
-  - `services/key_manager.py:117` — `cooldown_seconds` is assigned `timedelta.total_seconds()` (float) on one branch and `int` on others; the variable is first inferred as `int`.
-  - `services/scraper.py:13-15` — `ProxySpec` is redefined as a class after being imported as a typing alias.
-  - `services/context_manager.py`, `services/session_manager.py`, `api/v1/endpoints.py`, `app.py` — several functions still lack explicit return annotations.
-- **ruff**: 54 errors, none blocking runtime.
-  - `B904` (14 occurrences) in `api/v1/endpoints.py` — `raise HTTPException(...)` inside `except` clauses does not use `raise ... from err`.
-  - `F403` in `src/domain/{enums,interfaces,schemas}/__init__.py` — `from .logic import *` re-exports are opaque to static analysis.
-  - `E402` across test files that manipulate `sys.path` before importing from `src` (per `tests/AGENTS.md` convention).
-  - `EM101/EM102` in `gemini.py` and `gateway.py`, `F841` unused `last_exception` in `gateway.py`, `F401` unused `re` import in `endpoints.py`.
-- **Version drift**: `pyproject.toml` declares `1.3.0`, but `src/app.py` still constructs `FastAPI(version="1.0.0")`, so the OpenAPI spec exposes the older value.
+- **pytest (unit)**: 52/52 passed. Integration test `test_auto_models_functionality` may fail when the local Ollama instance returns an embedding-only model for chat (see `TROUBLESHOOTING.md` section 12).
+- **mypy**: 0 errors (`mypy src/`). Pydantic v2 mypy plugin enabled.
+- **ruff (src/)**: 0 errors. Test files retain `E402` import-order violations due to `sys.path` manipulation (by design).
+- **Version**: `pyproject.toml` and `src/app.py` both declare `1.3.0`.
 
 ---
-*Last Updated: 2026-04-15*
+*Last Updated: 2026-04-16*

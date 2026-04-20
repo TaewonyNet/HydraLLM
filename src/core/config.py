@@ -6,6 +6,12 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     log_level: str = "INFO"
     debug: bool = False
+    locale: str = "ko"
+    embedding_model: str = "bge-m3:latest"
+    # 웹 키워드 추출용 로컬 LLM (Ollama 모델명). 비워두면 정규식 폴백만 사용.
+    keyword_extraction_model: str | None = None
+    # 키워드/라이브 레퍼런스 파일 디렉터리 (프로젝트 루트 기준 상대 경로 허용)
+    data_dir: str = "data"
 
     max_tokens_fast_model: int = 8192
     max_tokens_expensive_model: int = 32768
@@ -50,8 +56,8 @@ class Settings(BaseSettings):
         str
     ] | str | None = "gemini-1.5-pro,gemini-3.1-pro,llama-3.1-70b,gpt-4o"
 
-    default_free_model: str = "gemini-2.5-flash"
-    default_premium_model: str = "gemini-2.5-flash"
+    default_free_model: str = "gemini-1.5-flash"
+    default_premium_model: str = "gemini-1.5-flash"
 
     default_scrape_mode: str = "standard"
 
@@ -59,10 +65,12 @@ class Settings(BaseSettings):
     enabled_models: list[str] | str | None = None
 
     enable_context_compression: bool = True
+    debug_comm_log: bool = False
 
     database_path: str = "gateway_sessions.sqlite"
 
     max_sessions: int = 50
+    session_retention_days: int = 30  # 세션 보관 기간 (기본 30일, 최대 365일)
     session_compact_threshold: int = 6000  # 토큰 추정치 초과 시 compaction 트리거
     session_recent_window: int = 4  # compaction 시 유지할 최근 메시지 수
 

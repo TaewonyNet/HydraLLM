@@ -2,6 +2,10 @@
 
 > 본 문서가 한국어 공식 문서입니다. 영문판([AGENTS.md](AGENTS.md))은 참고용으로 유지됩니다.
 
+## 멀티 리모트 푸시 가이드
+- **명령어**: `git push all main`
+- **설정**: `all` 리모트는 GitHub와 GitLab을 모두 push 대상으로 포함하고 있어, 한 번의 명령으로 양쪽 저장소에 동시 반영됩니다.
+
 ## 시스템 개요
 - **스택**: Python 3.10+, FastAPI, Uvicorn, SQLite(WAL), Playwright + Scrapling, LLMLingua-2(선택).
 - **목표**: 컨텍스트 인지 라우팅, 다중 공급자 페일오버, 실시간 웹 보강을 결합해 토큰당 LLM 성능을 극대화.
@@ -26,6 +30,9 @@
 | **설정** | `src/core/config.py::Settings` | `.env`를 읽는 `pydantic-settings` 로더. |
 | **예외** | `src/core/exceptions.py` | `ErrorCategory`에 기반한 `BaseAppError` 계층. |
 | **도메인** | `src/domain/enums/logic.py`, `src/domain/interfaces/logic.py`, `src/domain/models.py` | 열거형(`ProviderType`, `AgentType`, `ModelType`, `RoutingReason`), 추상 인터페이스, Pydantic DTO(`ChatRequest`, `ChatResponse`, `RoutingDecision`, `MessagePart`). |
+| **웹 의도 분류** | `src/services/intent_classifier.py::IntentClassifier` | 키워드 부분문자열 fast-path 이후 Ollama bge-m3 임베딩 코사인 유사도로 판정. false negative 시 `learn_from_missed_query` 로 LLM 추출/정규식 폴백을 거쳐 키워드 추가. |
+| **키워드 저장소** | `src/services/keyword_store.py::KeywordStore` | 언어별(`ko`, `en`) JSON 영속화(`data/web_keywords.{lang}.json`). atomic tmp-rename, FIFO 상한 200, 2~60자 검증, case-insensitive 중복 제거. |
+| **통합 검증** | `scripts/validate_flow.py` | Hydra `has_search=true` 응답을 라이브 기준으로 삼아 6채널(Hydra api/자동/강제 + openclaw 직접/자동/강제)을 교차 판정하고 false negative 질의를 자동 학습 API 로 포워드. |
 
 ## 요청 라이프사이클 (Chat)
 
@@ -38,6 +45,7 @@
 7. **응답** — 비스트리밍 요청은 `ChatResponse`를 반환. 스트리밍은 동일 결과를 OpenAI 스타일 SSE 청크로 감쌈.
 
 ## 규약
+- **Git Push 금지**: 에이전트는 어떠한 경우에도 `git push`를 직접 수행하지 않는다. 모든 변경 사항은 `git commit`까지만 수행하며, 푸시는 오직 사용자가 직접 수행한다.
 - **Clean Architecture 경계** — 도메인은 순수 유지. 서비스는 도메인과 어댑터 인터페이스에만 의존. 어댑터는 `ILLMProvider`를 구현. API는 DI를 통해 서비스에 의존.
 - **비동기 우선 I/O** — 모든 네트워크/DB/서브프로세스 호출은 `async`여야 함. 서비스에서 `time.sleep`이나 블로킹 `requests` 호출 금지.
 - **표준 SSE** — 스트리밍 청크는 `chat.completion.chunk` 형태를 따르며 `data: [DONE]\n\n`으로 종료.
@@ -59,4 +67,4 @@
 - **알려진 갭** — 현재 실패 중인 검사는 `TROUBLESHOOTING.ko.md` 열한 번째 이하 섹션 참조.
 
 ---
-*마지막 업데이트: 2026-04-15*
+*마지막 업데이트: 2026-04-20*

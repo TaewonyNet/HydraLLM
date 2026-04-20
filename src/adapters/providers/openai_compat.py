@@ -1,5 +1,6 @@
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 
 from src.core.exceptions import RateLimitError, ServiceUnavailableError
@@ -13,7 +14,15 @@ logger = get_logger(__name__)
 
 class OpenAICompatAdapter(ILLMProvider):
     def __init__(self, base_url: str, api_key: str, default_model: str | None = None):
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=30)
+        # 자체 httpx.AsyncClient 주입으로 openai==1.2.1 과 httpx>=0.28 의
+        # proxies kwarg 호환성 문제를 우회한다.
+        http_client = httpx.AsyncClient(timeout=60)
+        self.client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=60,
+            http_client=http_client,
+        )
         self.default_model = default_model
         logger.info(f"OpenAICompatAdapter initialized for base_url: {base_url}")
 
@@ -164,13 +173,31 @@ class OpenAICompatAdapter(ILLMProvider):
             session_id=None,
         )
 
+    _NON_CHAT_MODEL_MARKERS: tuple[str, ...] = (
+        "embed",
+        "embedding",
+        "rerank",
+        "vision-adapter",
+        "bge-",
+        "bge",
+        "gte-",
+        "gte",
+        "e5-",
+        "nomic-embed",
+        "mxbai-embed",
+        "jina-embed",
+        "snowflake-arctic-embed",
+        "whisper",
+        "clip",
+    )
+
     async def discover_models(self) -> list[dict[str, Any]]:
         try:
             response = await self.client.models.list()
-            all_models = []
+            all_models: list[dict[str, Any]] = []
             for m in response.data:
                 m_id = m.id.lower()
-                if any(x in m_id for x in ["embed", "rerank", "vision-adapter"]):
+                if any(marker in m_id for marker in self._NON_CHAT_MODEL_MARKERS):
                     continue
 
                 all_models.append(
@@ -181,6 +208,17 @@ class OpenAICompatAdapter(ILLMProvider):
                         "tier": "standard",
                     }
                 )
+
+            # instruct나 chat이 포함된 모델을 우선순위에 둔다
+            def sort_key(model_dict: dict[str, Any]) -> int:
+                m_id = model_dict["id"].lower()
+                if "instruct" in m_id:
+                    return 0
+                if "chat" in m_id:
+                    return 1
+                return 10
+
+            all_models.sort(key=sort_key)
             return all_models
         except Exception as e:
             logger.error(f"Failed to discover models from {self.client.base_url}: {e}")

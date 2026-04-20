@@ -6,6 +6,7 @@ from src.core.config import settings
 from src.domain.enums import AgentType, ModelType, ProviderType, RoutingReason
 from src.domain.interfaces import IContextAnalyzer
 from src.domain.models import ChatRequest, RoutingDecision
+from src.i18n import t
 
 logger = logging.getLogger(__name__)
 
@@ -20,45 +21,20 @@ class ContextAnalyzer(IContextAnalyzer):
         self._default_free_model = settings.default_free_model
         self._default_premium_model = settings.default_premium_model
         self._provider_priority = self._parse_config_list(settings.provider_priority)
+        # gateway 등 외부에서 read-only 로 참조할 수 있도록 공용 속성도 노출.
+        self.provider_priority: list[str] = list(self._provider_priority)
 
         self._model_mapping: dict[str, ModelType | str] = {
-            "gemini-3.1-pro": ModelType.GEMINI_3_1_PRO,
-            "gemini-3.0-pro": ModelType.GEMINI_3_PRO,
-            "gemini-3.0-flash": ModelType.GEMINI_3_FLASH,
-            "gemini-2.5-pro": ModelType.GEMINI_2_5_PRO,
-            "gemini-2.5-flash": ModelType.GEMINI_2_5_FLASH,
-            "gemini-2.0-pro": ModelType.GEMINI_2_0_PRO,
-            "gemini-2.0-flash": ModelType.GEMINI_2_0_FLASH,
-            "gemini-2.0-thinking": ModelType.GEMINI_2_0_THINKING,
-            "gemini-pro": ModelType.GEMINI_PRO,
-            "gemini-flash": ModelType.GEMINI_FLASH,
-            "gemini-pro-vision": ModelType.GEMINI_PRO_VISION,
-            "gemini-flash-vision": ModelType.GEMINI_FLASH_VISION,
-            "llama-4-70b": ModelType.GROQ_LLAMA_4_70B,
-            "llama-4-8b": ModelType.GROQ_LLAMA_4_8B,
-            "llama-3.3-70b": ModelType.GROQ_LLAMA_3_3_70B,
-            "deepseek-v3.1": ModelType.GROQ_DEEPSEEK_V3_1,
-            "deepseek-r1-70b": ModelType.GROQ_DEEPSEEK_R1_70B,
-            "deepseek-r1-32b": ModelType.GROQ_DEEPSEEK_R1_32B,
-            "groq": ModelType.GROQ_GROQ,
-            "gpt-5.3": ModelType.CEREBRAS_GPT_5_3_CODEX,
-            "qwen-3": ModelType.CEREBRAS_QWEN_3_235B,
-            "glm-4.6": ModelType.CEREBRAS_GLM_4_6,
-            "gpt-oss": ModelType.CEREBRAS_GPT_OSS_120B,
-            "llama-3.3-cerebras": ModelType.CEREBRAS_LLAMA_3_3_70B,
-            "llama": ModelType.CEREBRAS_LLAMA,
-            "ollama": ModelType.OLLAMA_MODEL,
-            "llama3": ModelType.OLLAMA_MODEL,
             "mllm/auto": "auto",
-            "opencode": ModelType.OPENCODE_MODEL,
-            "openclaw": ModelType.OPENCLAW_MODEL,
-            "gpt-3.5-turbo": ModelType.GEMINI_2_5_FLASH,
-            "gpt-4": ModelType.GEMINI_3_PRO,
-            "gpt-4o": ModelType.GEMINI_3_PRO,
-            "gpt-4o-mini": ModelType.GEMINI_2_5_FLASH,
-            "claude-3-opus": ModelType.GEMINI_3_PRO,
-            "claude-3-sonnet": ModelType.GEMINI_3_PRO,
-            "claude-3-haiku": ModelType.GEMINI_2_5_FLASH,
+            "opencode": "opencode",
+            "openclaw": "openclaw",
+            "gpt-3.5-turbo": "gemini-2.5-flash",
+            "gpt-4": "gemini-2.5-pro",
+            "gpt-4o": "gemini-2.5-pro",
+            "gpt-4o-mini": "gemini-2.5-flash",
+            "claude-3-opus": "gemini-2.5-pro",
+            "claude-3-sonnet": "gemini-2.5-pro",
+            "claude-3-haiku": "gemini-2.5-flash",
         }
 
         self._provider_limits = {
@@ -174,56 +150,57 @@ class ContextAnalyzer(IContextAnalyzer):
         if request.has_search or request.web_fetch:
             return True
 
-        content_text = ""
-        if request.messages:
-            last_msg = request.messages[-1]
-            if isinstance(last_msg.content, str):
-                content_text = last_msg.content
-            elif isinstance(last_msg.content, list):
-                for part in last_msg.content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        content_text += part.get("text", "")
-
+        content_text = self.extract_last_user_content(request)
         if not content_text:
             return False
 
-        content_lower = content_text.lower()
-
+        # Detect URL
         if re.search(r"https?://[^\s/$.?#].[^\sㄱ-ㅎㅏ-ㅣ가-힣]*", content_text):
             return True
 
-        site_keywords = [
-            "래터박스",
-            "레터박스",
-            "letterboxd",
-            "네이버",
-            "naver",
-            "나무위키",
-            "위키백과",
-            "유튜브",
-            "youtube",
-            "구글",
-            "google",
-            "reddit",
-            "레딧",
-            "github",
-            "깃허브",
+        # Detect requests for real-time info or facts likely to change
+        dynamic_keywords = [
             "뉴스",
+            "소식",
+            "날씨",
+            "주가",
+            "코인",
+            "가격",
+            "순위",
+            "결과",
+            "일정",
             "오늘",
-            "실시간",
-            "가져와",
-            "찾아줘",
-            "검색",
-            "정보",
-            "어때",
-            "뭐야",
-            "요약",
+            "지금",
+            "현재",
+            "news",
+            "weather",
+            "price",
+            "stock",
+            "score",
+            "schedule",
+            "current",
+            "latest",
+            "today",
         ]
-
-        if any(s in content_lower for s in site_keywords):
+        if any(kw in content_text.lower() for kw in dynamic_keywords):
             return True
 
         return False
+
+    @staticmethod
+    def extract_last_user_content(request: ChatRequest) -> str:
+        if not request.messages:
+            return ""
+        last_msg = request.messages[-1]
+        if isinstance(last_msg.content, str):
+            return last_msg.content
+        if isinstance(last_msg.content, list):
+            parts = []
+            for part in last_msg.content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(part.get("text", ""))
+            return "".join(parts)
+        return ""
 
     def _parse_model_hint(self, model_hint: str | None) -> ModelType | str | None:
         if not model_hint:
@@ -387,80 +364,82 @@ class ContextAnalyzer(IContextAnalyzer):
         if provider == ProviderType.GEMINI:
             return self._default_free_model
         elif provider == ProviderType.GROQ:
-            return ModelType.GROQ_LLAMA_3_3_70B.value
+            return "llama-3.3-70b-versatile"
         else:
             return "llama3.1-70b"
 
-    def _get_target_for_model(self, model: ModelType | str) -> ProviderType | AgentType:
-        if hasattr(self, "_dynamic_targets"):
-            model_id = model.value if hasattr(model, "value") else str(model)
-            clean_id = model_id.replace("models/", "")
+    def get_default_model_for_provider(self, provider: ProviderType) -> str:
+        # gateway fallback 루프에서 호출하는 공용 API.
+        return self._get_default_model_for_provider(provider)
 
+    def _get_target_for_model(self, model: ModelType | str) -> ProviderType | AgentType:
+        """
+        Determines the provider/agent strictly based on string patterns.
+        Prioritizes dynamic targets and explicit prefixes.
+        """
+        # 1. Resolve to string
+        model_id = model.value if hasattr(model, "value") else str(model)
+
+        # 2. Check dynamically registered models (from discover_models)
+        if hasattr(self, "_dynamic_targets"):
+            clean_id = model_id.replace("models/", "")
             if clean_id in self._dynamic_targets:
                 return self._dynamic_targets[clean_id]
             if model_id in self._dynamic_targets:
                 return self._dynamic_targets[model_id]
 
-        model_str = model.value if hasattr(model, "value") else str(model)
-        model_lower = model_str.lower()
+        # 3. Explicit provider/agent prefix handling (e.g. 'gemini/custom-model')
+        if "/" in model_id:
+            prefix = model_id.split("/")[0].lower()
+            prefix_map = {
+                "gemini": ProviderType.GEMINI,
+                "groq": ProviderType.GROQ,
+                "cerebras": ProviderType.CEREBRAS,
+                "ollama": AgentType.OLLAMA,
+                "opencode": AgentType.OPENCODE,
+                "openclaw": AgentType.OPENCLAW,
+            }
+            if prefix in prefix_map:
+                return prefix_map[prefix]
+
+        # 4. Pattern-based routing
+        model_lower = model_id.lower()
         if "gemini" in model_lower:
             return ProviderType.GEMINI
-        if "groq" in model_lower:
+        if "groq" in model_lower or "llama" in model_lower or "deepseek" in model_lower:
+            if "ollama" in model_lower:
+                return AgentType.OLLAMA
             return ProviderType.GROQ
         if "cerebras" in model_lower:
             return ProviderType.CEREBRAS
-        if "ollama" in model_lower:
+        if (
+            "ollama" in model_lower
+            or "gemma" in model_lower
+            or "qwen" in model_lower
+            or "phi" in model_lower
+        ):
             return AgentType.OLLAMA
         if "opencode" in model_lower:
             return AgentType.OPENCODE
         if "openclaw" in model_lower:
             return AgentType.OPENCLAW
 
-        model_to_target: dict[ModelType, ProviderType | AgentType] = {
-            ModelType.GEMINI_3_1_PRO: ProviderType.GEMINI,
-            ModelType.GEMINI_3_PRO: ProviderType.GEMINI,
-            ModelType.GEMINI_3_FLASH: ProviderType.GEMINI,
-            ModelType.GEMINI_2_5_PRO: ProviderType.GEMINI,
-            ModelType.GEMINI_2_5_FLASH: ProviderType.GEMINI,
-            ModelType.GEMINI_2_0_PRO: ProviderType.GEMINI,
-            ModelType.GEMINI_2_0_FLASH: ProviderType.GEMINI,
-            ModelType.GEMINI_2_0_THINKING: ProviderType.GEMINI,
-            ModelType.GEMINI_PRO: ProviderType.GEMINI,
-            ModelType.GEMINI_PRO_VISION: ProviderType.GEMINI,
-            ModelType.GEMINI_FLASH: ProviderType.GEMINI,
-            ModelType.GEMINI_FLASH_VISION: ProviderType.GEMINI,
-            ModelType.GROQ_LLAMA_4_70B: ProviderType.GROQ,
-            ModelType.GROQ_LLAMA_4_8B: ProviderType.GROQ,
-            ModelType.GROQ_LLAMA_3_3_70B: ProviderType.GROQ,
-            ModelType.GROQ_DEEPSEEK_V3_1: ProviderType.GROQ,
-            ModelType.GROQ_DEEPSEEK_R1_70B: ProviderType.GROQ,
-            ModelType.GROQ_DEEPSEEK_R1_32B: ProviderType.GROQ,
-            ModelType.GROQ_GROQ: ProviderType.GROQ,
-            ModelType.CEREBRAS_GPT_5_3_CODEX: ProviderType.CEREBRAS,
-            ModelType.CEREBRAS_DEEPSEEK_R1_70B: ProviderType.CEREBRAS,
-            ModelType.CEREBRAS_GLM_4_6: ProviderType.CEREBRAS,
-            ModelType.CEREBRAS_GPT_OSS_120B: ProviderType.CEREBRAS,
-            ModelType.CEREBRAS_LLAMA_3_3_70B: ProviderType.CEREBRAS,
-            ModelType.CEREBRAS_LLAMA: ProviderType.CEREBRAS,
-            ModelType.OLLAMA_MODEL: AgentType.OLLAMA,
-            ModelType.OPENCODE_MODEL: AgentType.OPENCODE,
-            ModelType.OPENCLAW_MODEL: AgentType.OPENCLAW,
-        }
+        # 5. Default fallback
+        return ProviderType.GEMINI
 
-        if isinstance(model, ModelType):
-            return model_to_target.get(model, ProviderType.GEMINI)
+    def _map_model_name(self, request_model: str | None) -> str:
+        """
+        Simply returns the requested model name, stripping any provider prefix.
+        """
+        if not request_model or request_model.lower() == "auto":
+            return self._default_free_model
 
-        if hasattr(self, "_dynamic_targets") and model in self._dynamic_targets:
-            return self._dynamic_targets[model]
+        if "/" in request_model:
+            parts = request_model.split("/")
+            if len(parts) > 1:
+                return parts[1]
 
-        model_lower = str(model).lower()
-        if "llama" in model_lower or "groq" in model_lower:
-            return ProviderType.GROQ
-
-        if "ollama" in model_lower:
-            return AgentType.OLLAMA
-
-        return cast(ProviderType | AgentType, ProviderType.GEMINI)
+        return request_model
 
     def _calculate_cost(self, provider: ProviderType | None, tokens: int) -> float:
         if not provider:
@@ -478,7 +457,7 @@ class ContextAnalyzer(IContextAnalyzer):
                 "display_name": "GATEWAY/auto",
                 "owned_by": "gateway",
                 "tier": "free",
-                "description": "Automatically selects the best model based on context.",
+                "description": t("model.auto_desc"),
                 "capabilities": {
                     "max_tokens": 1000000,
                     "multimodal": True,
@@ -491,7 +470,7 @@ class ContextAnalyzer(IContextAnalyzer):
                 "display_name": "GEMINI/auto",
                 "owned_by": "gemini",
                 "tier": "free",
-                "description": "Automatically selects the best Gemini model.",
+                "description": t("model.gemini_auto_desc"),
                 "capabilities": {
                     "max_tokens": 1000000,
                     "multimodal": True,
@@ -504,7 +483,7 @@ class ContextAnalyzer(IContextAnalyzer):
                 "display_name": "GROQ/auto",
                 "owned_by": "groq",
                 "tier": "free",
-                "description": "Automatically selects the best Groq model.",
+                "description": t("model.groq_auto_desc"),
                 "capabilities": {
                     "max_tokens": 32768,
                     "multimodal": False,
@@ -517,7 +496,7 @@ class ContextAnalyzer(IContextAnalyzer):
                 "display_name": "CEREBRAS/auto",
                 "owned_by": "cerebras",
                 "tier": "free",
-                "description": "Automatically selects the best Cerebras model.",
+                "description": t("model.cerebras_auto_desc"),
                 "capabilities": {
                     "max_tokens": 32768,
                     "multimodal": False,

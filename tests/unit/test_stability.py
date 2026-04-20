@@ -1,8 +1,9 @@
-import pytest
-from src.services.analyzer import ContextAnalyzer
-from src.domain.models import ChatRequest, ChatMessage
-from src.api.v1.endpoints import _handle_chat_completion
 import re
+
+import pytest
+
+from src.domain.models import ChatMessage, ChatRequest
+from src.services.analyzer import ContextAnalyzer
 
 
 def test_re_module_availability():

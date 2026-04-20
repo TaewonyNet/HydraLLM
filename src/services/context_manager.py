@@ -2,13 +2,13 @@ import hashlib
 import logging
 import os
 import tempfile
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class ContextManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self._file_cache: dict[str, Any] = {}
         self._temp_files: list[str] = []
 
@@ -27,13 +27,13 @@ class ContextManager:
         self._temp_files.append(path)
         return path
 
-    def get_cached_file(self, content_hash: str) -> Optional[Any]:
+    def get_cached_file(self, content_hash: str) -> Any | None:
         return self._file_cache.get(content_hash)
 
-    def cache_file(self, content_hash: str, file_handle: Any):
+    def cache_file(self, content_hash: str, file_handle: Any) -> None:
         self._file_cache[content_hash] = file_handle
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         for path in self._temp_files:
             try:
                 if os.path.exists(path):

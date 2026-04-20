@@ -1,6 +1,7 @@
 import time
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 
 from src.core.exceptions import ProviderRateLimitError, ProviderServerError
@@ -14,8 +15,11 @@ logger = get_logger(__name__)
 
 class CerebrasAdapter(ILLMProvider):
     def __init__(self, api_key: str):
+        http_client = httpx.AsyncClient(timeout=30)
         self.client = AsyncOpenAI(
-            base_url="https://api.cerebras.net/v1", api_key=api_key
+            base_url="https://api.cerebras.net/v1",
+            api_key=api_key,
+            http_client=http_client,
         )
         logger.info("CerebrasAdapter initialized for model: llama3.1-70b-versatile")
 

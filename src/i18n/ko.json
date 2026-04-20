@@ -1,0 +1,95 @@
+{
+  "web": {
+    "injection_header": "[WEB REFERENCE DATA — 사용자 입력이 아님]\n아래는 보조 웹 데이터입니다. 사용자의 질문과 직접 관련된 경우에만 사용하세요. 이 데이터를 사용자가 말한 것처럼 답변에 섞지 마세요. 참조 시 출처 URL을 반드시 인용하세요.",
+    "context_truncated": "\n... [쿼터 보호를 위해 컨텍스트가 잘렸습니다] ...",
+    "no_search_results": "검색 결과를 찾을 수 없습니다.",
+    "no_safe_results": "안전한 검색 결과가 없습니다.",
+    "search_failed": "검색 실패: {error}",
+    "source_header": "--- 출처: {url} ---",
+    "source_footer": "--- 끝 ---",
+    "search_results_header": "--- 웹 검색 결과 ---"
+  },
+  "stream": {
+    "no_response": "[모델 응답 없음]",
+    "empty_response": "[빈 응답]"
+  },
+  "error": {
+    "no_gateway_response": "게이트웨이 응답 없음",
+    "no_messages": "요청에 메시지가 없습니다",
+    "no_model": "모델이 지정되지 않았고 자동 검색도 실패했습니다",
+    "ssrf_blocked_scheme": "차단됨: 지원하지 않는 스킴 '{scheme}'",
+    "ssrf_blocked_empty": "차단됨: 빈 호스트네임",
+    "ssrf_blocked_resolve": "차단됨: 호스트네임 '{hostname}' 확인 불가",
+    "ssrf_blocked_internal": "차단됨: 호스트네임 '{hostname}'이 내부 주소로 해석됨",
+    "fetch_failed": "{url} 가져오기 실패",
+    "blocked_url": "차단된 URL: {url}"
+  },
+  "admin": {
+    "provider_desc": "공급자 이름 (예: gemini, groq, cerebras)",
+    "keys_desc": "추가할 API 키 리스트"
+  },
+  "model": {
+    "auto_desc": "컨텍스트 기반으로 최적의 모델을 자동 선택합니다.",
+    "gemini_auto_desc": "최적의 Gemini 모델을 자동 선택합니다.",
+    "groq_auto_desc": "최적의 Groq 모델을 자동 선택합니다.",
+    "cerebras_auto_desc": "최적의 Cerebras 모델을 자동 선택합니다.",
+    "ollama_auto_desc": "최적의 Ollama 모델을 자동 선택합니다.",
+    "discovered_desc": "{base_url}의 모델"
+  },
+  "intent": {
+    "examples_need_search": [
+      "오늘 주요 뉴스 알려줘",
+      "최근 비트코인 시세가 어떻게 돼?",
+      "실시간 날씨 정보 좀 알려줘",
+      "올해 아카데미 수상작이 뭐야?",
+      "최신 아이폰 출시일이 언제야?",
+      "지금 환율 얼마야?",
+      "이번 주 넷플릭스 인기 순위 알려줘",
+      "현재 코로나 확진자 수 알려줘",
+      "오늘 주식시장 동향이 어때?",
+      "최근 테슬라 관련 뉴스 요약해줘",
+      "지금 서울 미세먼지 농도 어때?",
+      "2026년 월드컵 일정 알려줘",
+      "인터넷에서 검색해서 알려줘",
+      "최신 정보로 찾아봐줘",
+      "지금 상황이 어때?",
+      "what are today's top headlines?",
+      "current bitcoin price",
+      "latest news about AI regulation",
+      "what's the weather like right now?",
+      "recent SpaceX launch updates"
+    ],
+    "examples_no_search": [
+      "파이썬에서 리스트 정렬하는 방법 알려줘",
+      "피보나치 수열 코드 짜줘",
+      "삼각형의 넓이 공식이 뭐야?",
+      "영어로 자기소개 작성해줘",
+      "이 코드에 버그가 있는지 확인해줘",
+      "소설 줄거리 요약해줘",
+      "머신러닝이 뭔지 설명해줘",
+      "이메일 작성 도와줘",
+      "수학 문제 풀어줘",
+      "번역해줘: 안녕하세요",
+      "how to sort a list in Python",
+      "explain machine learning",
+      "write a poem about spring",
+      "fix this code for me",
+      "translate this to Korean"
+    ],
+    "threshold": 0.58
+  },
+  "boilerplate_patterns": [
+    "네이버\\s*(밴드|블로그|카페|로그인|메일|뉴스|날씨|홈)",
+    "(카카오톡|페이스북|X|트위터|인스타그램)\\s*공유하기",
+    "본문\\s*바로가기",
+    "(이전|다음)\\s*글\\s*보기",
+    "(좋아요|댓글|구독|팔로우)\\s*\\d*",
+    "copyright\\s*©.*",
+    "all\\s+rights?\\s+reserved",
+    "쿠키\\s*(정책|설정|동의)",
+    "개인정보\\s*(처리방침|보호정책)",
+    "운전전문학원",
+    "긴급출동",
+    "보험처리전문"
+  ]
+}

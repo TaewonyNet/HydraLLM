@@ -74,6 +74,10 @@ class ISessionManager(ABC):
         ...
 
     @abstractmethod
+    async def delete_session(self, session_id: str) -> None:
+        ...
+
+    @abstractmethod
     async def get_setting(self, key: str, default: Any = None) -> Any:
         ...
 
@@ -145,6 +149,18 @@ class ISessionManager(ABC):
 
     @abstractmethod
     async def get_scraping_summary(self) -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    async def get_recent_scraping(self, limit: int = 20) -> list[dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    async def clear_system_logs(self) -> None:
+        ...
+
+    @abstractmethod
+    async def cleanup_old_sessions(self, days: int = 30) -> int:
         ...
 
     @abstractmethod

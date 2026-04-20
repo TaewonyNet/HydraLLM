@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 import traceback
+from datetime import datetime
 from typing import Any, cast
 
 from src.adapters.providers.cerebras import CerebrasAdapter
@@ -9,48 +10,31 @@ from src.adapters.providers.gemini import GeminiAdapter
 from src.adapters.providers.local_cli import LocalCLIAdapter
 from src.adapters.providers.openai_compat import OpenAICompatAdapter
 from src.core.config import settings
-from src.core.exceptions import RateLimitError, ResourceExhaustedError
+from src.core.exceptions import (
+    BaseAppError,
+    RateLimitError,
+    ResourceExhaustedError,
+    ServiceUnavailableError,
+)
+from src.core.logging import request_id_ctx
 from src.domain.enums import AgentType, ModelType, ProviderType
 from src.domain.interfaces import ILLMProvider, IRouter, ISessionManager
 from src.domain.models import ChatMessage, ChatRequest, ChatResponse, RoutingDecision
 from src.services.analyzer import ContextAnalyzer
+from src.services.circuit_breaker import CircuitBreaker
+from src.services.comm_logger import comm_log_buffer
 from src.services.compressor import ContextCompressor
 from src.services.context_manager import ContextManager
+from src.services.intent_classifier import IntentClassifier
 from src.services.key_manager import KeyManager
 from src.services.metrics_service import MetricsService
 from src.services.observability import Observability
 from src.services.scraper import WebScraper
+from src.services.session_manager import SessionManager
 from src.services.session_orchestrator import SessionOrchestrator
 from src.services.web_context_service import WebContextService
 
 logger = logging.getLogger(__name__)
-
-
-class CircuitBreaker:
-    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60):
-        self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
-        self.failures = 0
-        self.last_failure_time: float = 0.0
-        self.state = "CLOSED"
-
-    def is_available(self) -> bool:
-        if self.state == "OPEN":
-            if time.time() - self.last_failure_time > self.recovery_timeout:
-                self.state = "HALF_OPEN"
-                return True
-            return False
-        return True
-
-    def report_success(self) -> None:
-        self.failures = 0
-        self.state = "CLOSED"
-
-    def report_failure(self) -> None:
-        self.failures += 1
-        self.last_failure_time = time.time()
-        if self.failures >= self.failure_threshold:
-            self.state = "OPEN"
 
 
 class Gateway(IRouter):
@@ -62,19 +46,23 @@ class Gateway(IRouter):
         scraper: WebScraper | None = None,
         compressor: ContextCompressor | None = None,
         metrics_service: MetricsService | None = None,
+        intent_classifier: IntentClassifier | None = None,
     ):
-        from .session_manager import SessionManager
-
-        self.analyzer = analyzer or ContextAnalyzer()
         self.key_manager = key_manager or KeyManager()
+        self.analyzer = analyzer or ContextAnalyzer(key_manager=self.key_manager)
         self.session_manager = session_manager or SessionManager()
         self.scraper = scraper or WebScraper()
         self.compressor = compressor or ContextCompressor()
         self.metrics_service = metrics_service or MetricsService(self.session_manager)
         self.context_manager = ContextManager()
+        self.intent_classifier = intent_classifier
 
         self.web_context = WebContextService(
-            self.analyzer, self.scraper, self.compressor, self.session_manager
+            self.analyzer,
+            self.scraper,
+            self.compressor,
+            self.session_manager,
+            intent_classifier=self.intent_classifier,
         )
         self.sessions = SessionOrchestrator(self.session_manager, self.compressor)
 
@@ -88,8 +76,6 @@ class Gateway(IRouter):
     async def process_request(
         self, request: ChatRequest, endpoint: str = "chat"
     ) -> ChatResponse:
-        from src.core.logging import request_id_ctx
-
         request_id = request_id_ctx.get()
         Observability.start_trace(request_id)
 
@@ -106,9 +92,21 @@ class Gateway(IRouter):
         history = await self.sessions.load_history(request)
         await self.sessions.save_user_message(request)
 
+        # Inject current date and strict truth instructions as a system message
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        date_msg = ChatMessage(
+            role="system",
+            content=(
+                f"[SYSTEM CONTEXT] Today is {today_str}. "
+                "You MUST prioritize the provided [WEB REFERENCE DATA] over your internal knowledge. "
+                "Language Policy: Always respond in the SAME LANGUAGE as the user query (Default: Korean). "
+                "Each search result may contain a [PUBLISHED_DATE]. ALWAYS check these dates to ensure accuracy."
+            ),
+        )
+
         if history:
             seen = set()
-            merged: list[ChatMessage] = []
+            merged: list[ChatMessage] = [date_msg]
             for m in history + request.messages:
                 content_str = str(m.content).strip()
                 key = (m.role, content_str[:300])
@@ -116,6 +114,8 @@ class Gateway(IRouter):
                     merged.append(m)
                     seen.add(key)
             request.messages = merged
+        else:
+            request.messages = [date_msg] + request.messages
 
         routing_start = time.time()
         available_tiers = self._get_available_tiers()
@@ -135,6 +135,7 @@ class Gateway(IRouter):
             message=routing_log,
             metadata={
                 "session_id": request.session_id,
+                "request_id": request_id,
                 "decision": {
                     "provider": decision.provider.value
                     if decision and decision.provider
@@ -160,8 +161,30 @@ class Gateway(IRouter):
             request.model = decision.model_name
 
         web_start = time.time()
-        web_parts = await self.web_context.enrich_request(request)
-        Observability.record_step("web_enrichment", time.time() - web_start)
+        web_res = await self.web_context.enrich_request(request)
+        web_parts, web_text = web_res if isinstance(web_res, tuple) else ([], None)
+        web_latency = time.time() - web_start
+        Observability.record_step("web_enrichment", web_latency)
+
+        if web_text:
+            await self.session_manager.log_system_event(
+                level="INFO",
+                category="WEB_ENRICH",
+                message=f"Web context enriched for session {request.session_id} ({len(web_text)} chars)",
+                metadata={"request_id": request_id, "latency": web_latency},
+            )
+            injection = ChatMessage(
+                role="system",
+                content=(
+                    "--- REAL-TIME WEB CONTEXT START ---\n"
+                    "The following information was retrieved from the web specifically for this turn. "
+                    "Use this as the absolute source of truth for the final response.\n\n"
+                    f"{web_text}\n"
+                    "--- REAL-TIME WEB CONTEXT END ---"
+                ),
+                name="web_context",
+            )
+            request.messages.insert(-1, injection)
 
         llm_start = time.perf_counter()
         try:
@@ -182,7 +205,9 @@ class Gateway(IRouter):
                 message=f"Request successful via {provider_name} ({latency_ms}ms)",
                 metadata={
                     "request_id": request_id,
+                    "session_id": request.session_id,
                     "provider": provider_name,
+                    "model": response.model,
                     "latency_ms": latency_ms,
                     "usage": response.usage,
                 },
@@ -206,13 +231,10 @@ class Gateway(IRouter):
             all_parts = (web_parts or []) + (retry_parts or [])
             if response.choices and all_parts:
                 msg = response.choices[0].message
-                # Inject parts into message extra data
-                parts_list = [
-                    p if isinstance(p, dict) else p.model_dump() for p in all_parts
-                ]
-                if not hasattr(msg, "model_extra") or msg.model_extra is None:
-                    msg.model_extra = {}
-                msg.model_extra["parts"] = parts_list
+                parts_list: list[dict[str, Any]] = list(all_parts)
+                extra = msg.model_extra or {}
+                extra["parts"] = parts_list
+                msg.__dict__["__pydantic_extra__"] = extra
 
             try:
                 await self.sessions.save_assistant_response(
@@ -231,7 +253,6 @@ class Gateway(IRouter):
         except Exception as e:
             self.context_manager.cleanup()
             latency_ms = int((time.perf_counter() - llm_start) * 1000)
-            from src.core.exceptions import BaseAppError
 
             category = "INTERNAL_ERROR"
             if isinstance(e, BaseAppError):
@@ -249,6 +270,7 @@ class Gateway(IRouter):
                 message=f"Request failed: {category} - {str(e)[:100]}",
                 metadata={
                     "request_id": request_id,
+                    "session_id": request.session_id,
                     "error": str(e),
                     "category": category,
                     "traceback": traceback.format_exc()
@@ -292,20 +314,31 @@ class Gateway(IRouter):
         self, request: ChatRequest, decision: RoutingDecision
     ) -> tuple[ChatResponse, list[dict[str, Any]]]:
         retry_parts: list[dict[str, Any]] = []
-        last_exception: Exception | None = None
 
         is_strict = False
         original_hint = request.model.lower() if request.model else ""
-        if "/" in original_hint and original_hint.split("/")[1] == "auto":
-            is_strict = True
-            logger.info(f"Using STRICT routing for {original_hint}")
+        if "/" in original_hint:
+            parts = original_hint.split("/")
+            if parts[1] == "auto" or parts[0] in [p.value for p in ProviderType]:
+                is_strict = True
+                logger.info(f"Using STRICT routing for {original_hint}")
 
         providers_to_try = []
         if decision.provider:
             providers_to_try.append(decision.provider)
 
+        if not providers_to_try or (original_hint in ["auto", "default", "mllm/auto"]):
+            has_any_cloud_active = False
+            for p in [ProviderType.GEMINI, ProviderType.GROQ, ProviderType.CEREBRAS]:
+                if self.key_manager.get_available_keys_count(p) > 0:
+                    has_any_cloud_active = True
+                    break
+            if not has_any_cloud_active and not is_strict:
+                logger.warning("No cloud keys available. Skipping cloud attempts.")
+                return await self._final_fallback(request, decision), retry_parts
+
         if not is_strict:
-            for p_name in self.analyzer._provider_priority:
+            for p_name in self.analyzer.provider_priority:
                 try:
                     p_type = ProviderType(p_name)
                     if p_type not in providers_to_try:
@@ -317,15 +350,14 @@ class Gateway(IRouter):
             if not self._breakers[provider_type].is_available():
                 logger.warning(f"Skipping {provider_type.value}: Circuit is OPEN")
                 if is_strict:
-                    raise ResourceExhaustedError(
-                        f"Strict provider {provider_type.value} is currently unavailable (Circuit OPEN)"
-                    )
+                    msg = f"Strict provider {provider_type.value} is currently unavailable (Circuit OPEN)"
+                    raise ResourceExhaustedError(msg)
                 continue
 
             if provider_type != decision.provider:
-                new_model = self.analyzer._get_default_model_for_provider(provider_type)
+                new_model = self.analyzer.get_default_model_for_provider(provider_type)
                 logger.info(
-                    f"🔄 Switching provider to {provider_type.value}, model to {new_model}"
+                    f"Switching provider to {provider_type.value}, model to {new_model}"
                 )
                 request.model = new_model
                 decision.model_name = new_model
@@ -337,7 +369,30 @@ class Gateway(IRouter):
                     api_key = await self.key_manager.get_next_key(provider_type)
                     adapter = self._get_provider_adapter(provider_type, api_key)
 
+                    comm_log_buffer.record(
+                        "request",
+                        provider_type.value,
+                        {
+                            "model": request.model,
+                            "messages_count": len(request.messages or []),
+                            "has_search": request.has_search,
+                            "stream": request.stream,
+                        },
+                    )
+
                     response = await adapter.generate(request, api_key)
+
+                    comm_log_buffer.record(
+                        "response",
+                        provider_type.value,
+                        {
+                            "model": response.model,
+                            "finish_reasons": [
+                                c.finish_reason for c in (response.choices or [])
+                            ],
+                            "usage": response.usage,
+                        },
+                    )
 
                     self._breakers[provider_type].report_success()
                     await self.key_manager.report_success(provider_type, api_key)
@@ -347,7 +402,6 @@ class Gateway(IRouter):
                     return response, retry_parts
 
                 except (RateLimitError, ResourceExhaustedError) as e:
-                    last_exception = e
                     self._breakers[provider_type].report_failure()
                     if api_key:
                         await self.key_manager.report_failure(provider_type, api_key, e)
@@ -363,9 +417,28 @@ class Gateway(IRouter):
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(1)
 
+                except ServiceUnavailableError as e:
+                    logger.error(f"Service error with {provider_type.value}: {e}")
+                    self._breakers[provider_type].report_failure()
+                    if api_key:
+                        await self.key_manager.report_failure(provider_type, api_key, e)
+                    if self.key_manager.get_available_keys_count(provider_type) == 0:
+                        if is_strict:
+                            raise e
+                        break
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(1)
+
                 except Exception as e:
-                    last_exception = e
                     logger.error(f"Unexpected error with {provider_type.value}: {e}")
+                    err_msg = str(e).lower()
+                    if api_key and (
+                        "403" in err_msg
+                        or "denied" in err_msg
+                        or "api_key_invalid" in err_msg
+                        or "unauthorized" in err_msg
+                    ):
+                        await self.key_manager.report_failure(provider_type, api_key, e)
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(1)
                     else:
@@ -392,12 +465,23 @@ class Gateway(IRouter):
         if not response.usage:
             response.usage = {}
         idx = self.key_manager.get_key_index(provider, key)
+        
+        # 라우팅 사유를 명확한 기술적 상수로 매핑
+        reason_map = {
+            "model_hint": "USER_HINT",
+            "token_count": "TOKEN_OPTIMIZED",
+            "image_present": "MULTIMODAL_ANALYSIS",
+            "WEB_INTENT_REQUIRE_INTELLIGENCE": "WEB_INTENT_SEARCH",
+            "key_availability": "KEY_AVAILABILITY",
+        }
+        display_reason = reason_map.get(decision.reason, str(decision.reason).upper())
+
         response.usage.update(
             {
                 "gateway_provider": provider.value,
                 "gateway_key_index": idx,
                 "gateway_model": decision.model_name,
-                "routing_reason": decision.reason,
+                "routing_reason": display_reason,
             }
         )
 
@@ -421,6 +505,47 @@ class Gateway(IRouter):
                 self._adapters[adapter_key] = CerebrasAdapter(api_key)
         return self._adapters[adapter_key]
 
+    _CHAT_MODEL_PREFERENCE: tuple[str, ...] = (
+        "llama",
+        "qwen",
+        "mistral",
+        "gemma",
+        "phi",
+        "deepseek",
+        "yi",
+        "wizardlm",
+    )
+
+    _NON_CHAT_MODEL_MARKERS: tuple[str, ...] = (
+        "embed",
+        "embedding",
+        "rerank",
+        "vision-adapter",
+        "bge-",
+        "gte-",
+        "e5-",
+        "nomic-embed",
+        "mxbai-embed",
+        "jina-embed",
+        "snowflake-arctic-embed",
+        "whisper",
+        "clip",
+    )
+
+    def _is_chat_capable_model(self, model_id: str) -> bool:
+        lowered = model_id.lower()
+        return not any(marker in lowered for marker in self._NON_CHAT_MODEL_MARKERS)
+
+    def _pick_preferred_chat_model(self, models: list[str]) -> str | None:
+        chat_models = [m for m in models if self._is_chat_capable_model(m)]
+        if not chat_models:
+            return None
+        for preferred in self._CHAT_MODEL_PREFERENCE:
+            for m in chat_models:
+                if preferred in m.lower():
+                    return m
+        return chat_models[0]
+
     async def _process_with_agent(
         self, request: ChatRequest, decision: RoutingDecision
     ) -> ChatResponse:
@@ -433,7 +558,7 @@ class Gateway(IRouter):
         agent_models = [
             m["id"]
             for m in discovered_models
-            if m.get("owned_by") == "local-agent"
+            if m.get("owned_by") == agent.value
             and (
                 m["id"].lower().startswith(agent.value.lower())
                 or m.get("display_name", "").lower().startswith(agent.value.lower())
@@ -447,30 +572,41 @@ class Gateway(IRouter):
                 for m_info in new_models:
                     self.analyzer.register_model(m_info["id"], agent, m_info)
                 agent_models = [m["id"] for m in new_models]
-            except Exception:
-                pass
-
-        if (
-            not decision.model_name
-            or decision.model_name == agent.value
-            or decision.model_name == "auto"
-            or decision.model_name not in agent_models
-        ):
-            if agent_models:
-                target = next(
-                    (m for m in agent_models if "llama" in m.lower()), agent_models[0]
+            except Exception as disc_err:
+                logger.warning(
+                    f"Failed to discover models for agent {agent.value}: {disc_err}"
                 )
-                decision.model_name = target
-                request.model = target
-            else:
+
+        model_requested = decision.model_name
+        needs_resolution = (
+            not model_requested
+            or model_requested == agent.value
+            or model_requested == "auto"
+            or model_requested not in agent_models
+            or not self._is_chat_capable_model(model_requested)
+        )
+
+        if needs_resolution:
+            target = self._pick_preferred_chat_model(agent_models)
+            if target is None:
                 fallback_model = "llama3"
+                logger.warning(
+                    f"Agent {agent.value} has no chat-capable model discovered; "
+                    f"falling back to '{fallback_model}'"
+                )
                 decision.model_name = fallback_model
                 request.model = fallback_model
+            else:
+                decision.model_name = target
+                request.model = target
 
         adapter = self._get_agent_adapter(agent)
         resp = await adapter.generate(request, "local-agent")
 
         full_model_path = f"LOCAL-AGENT/{agent.value}/{decision.model_name}"
+        if decision.model_name.startswith(agent.value + "/"):
+            full_model_path = f"LOCAL-AGENT/{decision.model_name}"
+
         if not resp.usage:
             resp.usage = {}
         resp.usage.update(
