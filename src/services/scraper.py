@@ -6,6 +6,7 @@ import logging
 import re
 import socket
 import urllib.parse
+from collections.abc import Callable
 from typing import Any, Literal
 
 try:
@@ -71,9 +72,13 @@ def _unwrap_bing_redirect(url: str) -> str | None:
     if u.startswith("a1"):
         u = u[2:]
     padded = u + "=" * (-len(u) % 4)
-    for decoder in (base64.urlsafe_b64decode, base64.b64decode):
+    decoders: tuple[Callable[[str], bytes], ...] = (
+        base64.urlsafe_b64decode,
+        base64.b64decode,
+    )
+    for decoder in decoders:
         try:
-            decoded = decoder(padded).decode("utf-8", errors="ignore").strip()
+            decoded: str = decoder(padded).decode("utf-8", errors="ignore").strip()
         except (binascii.Error, ValueError):
             continue
         if decoded.startswith(("http://", "https://")):
@@ -314,7 +319,7 @@ class WebScraper:
             {"itemprop": "datePublished"},
         ]
         for selector in meta_selectors:
-            meta = soup.find("meta", attrs=selector)
+            meta = soup.find("meta", attrs=dict(selector))
             if meta and meta.get("content"):
                 date_str = str(meta.get("content"))
                 return date_str[:10]  # Return YYYY-MM-DD
@@ -426,8 +431,9 @@ class WebScraper:
         ]
         raw_links: list[str] = []
         for sel in candidate_selectors:
+            hits: list[str] = []
             try:
-                hits = response.css(sel).getall()
+                hits = list(response.css(sel).getall())
             except Exception:
                 hits = []
             if hits:
@@ -475,8 +481,9 @@ class WebScraper:
         ]
         raw_links: list[str] = []
         for sel in candidate_selectors:
+            hits: list[str] = []
             try:
-                hits = response.css(sel).getall()
+                hits = list(response.css(sel).getall())
             except Exception:
                 hits = []
             if hits:

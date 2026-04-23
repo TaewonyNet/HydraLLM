@@ -866,7 +866,7 @@ class SessionManager(ISessionManager):
         )
 
     async def get_usage_summary(self) -> list[dict[str, Any]]:
-        def _get():
+        def _get() -> list[dict[str, Any]]:
             with self._get_conn() as conn:
                 rows = conn.execute(
                     "SELECT provider, model, SUM(prompt_tokens) as prompt, SUM(completion_tokens) as completion, SUM(total_tokens) as total, COUNT(*) as count FROM usage_metrics GROUP BY provider, model"
@@ -1000,7 +1000,7 @@ class SessionManager(ISessionManager):
         )
 
     async def get_scraping_summary(self) -> dict[str, Any]:
-        def _get():
+        def _get() -> dict[str, Any]:
             with self._get_conn() as conn:
                 total = conn.execute(
                     "SELECT count(*) FROM scraping_metrics"
@@ -1018,7 +1018,7 @@ class SessionManager(ISessionManager):
     async def get_recent_scraping(self, limit: int = 20) -> list[dict[str, Any]]:
         """최근 웹 스크래핑 내역 조회."""
 
-        def _get():
+        def _get() -> list[dict[str, Any]]:
             with self._get_conn() as conn:
                 rows = conn.execute(
                     "SELECT * FROM scraping_metrics ORDER BY created_at DESC LIMIT ?",
@@ -1061,7 +1061,7 @@ class SessionManager(ISessionManager):
         await asyncio.to_thread(self._set_setting_sync, key, value)
 
     async def get_recent_logs(self, limit: int = 50) -> list[dict[str, Any]]:
-        def _get():
+        def _get() -> list[dict[str, Any]]:
             with self._get_conn() as conn:
                 rows = conn.execute(
                     "SELECT * FROM system_logs ORDER BY created_at DESC LIMIT ?",
@@ -1072,7 +1072,7 @@ class SessionManager(ISessionManager):
         return await asyncio.to_thread(_get)
 
     async def get_all_provider_health(self) -> list[dict[str, Any]]:
-        def _get():
+        def _get() -> list[dict[str, Any]]:
             with self._get_conn() as conn:
                 rows = conn.execute("SELECT * FROM provider_health").fetchall()
                 return [dict(r) for r in rows]
@@ -1082,7 +1082,7 @@ class SessionManager(ISessionManager):
     async def clear_system_logs(self) -> None:
         """시스템 로그 전체 삭제."""
 
-        def _clear():
+        def _clear() -> None:
             with self._get_conn() as conn:
                 conn.execute("DELETE FROM system_logs")
                 conn.commit()
@@ -1092,14 +1092,14 @@ class SessionManager(ISessionManager):
     async def cleanup_old_sessions(self, days: int = 30) -> int:
         """지정된 기간보다 오래된 세션 삭제."""
 
-        def _cleanup():
+        def _cleanup() -> int:
             with self._get_conn() as conn:
                 # updated_at 기준
                 cursor = conn.execute(
                     "DELETE FROM sessions WHERE julianday('now') - julianday(updated_at) > ?",
                     (days,),
                 )
-                count = cursor.rowcount
+                count: int = cursor.rowcount
                 conn.commit()
                 return count
 

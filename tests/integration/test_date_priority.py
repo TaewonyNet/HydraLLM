@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+import pytest
+
 # Add src to path
 src_path = str(Path(__file__).parent.parent.parent / "src")
 if src_path not in sys.path:
@@ -14,6 +16,7 @@ from domain.models import ChatMessage, ChatRequest
 from services.gateway import Gateway
 
 
+@pytest.mark.asyncio
 async def test_date_aware_priority():
     print("\n" + "=" * 60)
     print("      TESTING DATE-AWARE CONTEXT PRIORITY      ")

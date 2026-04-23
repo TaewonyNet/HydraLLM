@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, cast
+from typing import Any
 
 from src.core.config import settings
 from src.domain.enums import AgentType, ModelType, ProviderType, RoutingReason
@@ -103,6 +103,18 @@ class ContextAnalyzer(IContextAnalyzer):
                     and available_tiers[ProviderType.CEREBRAS]
                 ):
                     preferred_provider = ProviderType.CEREBRAS
+
+        # 명시적 provider hint 추론 (예: "gemini-pro", "groq-llama-3.3-70b").
+        # 모델 매핑에 없고 `/` prefix 도 없지만 provider 키워드가 포함된 경우 preferred_provider 설정.
+        if (
+            not preferred_provider
+            and model_hint not in self._model_mapping
+            and model_hint not in ("auto", "default", "opencode", "openclaw")
+        ):
+            for p in ProviderType:
+                if p.value in model_hint:
+                    preferred_provider = p
+                    break
 
         if model_hint == "opencode":
             model_list = self.get_supported_models_info()
@@ -391,7 +403,7 @@ class ContextAnalyzer(IContextAnalyzer):
         # 3. Explicit provider/agent prefix handling (e.g. 'gemini/custom-model')
         if "/" in model_id:
             prefix = model_id.split("/")[0].lower()
-            prefix_map = {
+            prefix_map: dict[str, ProviderType | AgentType] = {
                 "gemini": ProviderType.GEMINI,
                 "groq": ProviderType.GROQ,
                 "cerebras": ProviderType.CEREBRAS,

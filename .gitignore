@@ -38,3 +38,9 @@ gateway.log
 gateway_sessions.sqlite
 startup_error_debug.log
 test_out.log
+/gateway_sessions.sqlite
+/gateway.log
+/CLAUDE.md
+/AGENTS.md
+/AGENTS.ko.md
+/archive/

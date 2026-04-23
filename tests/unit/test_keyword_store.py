@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from src.services.keyword_store import KeywordStore, detect_language
+
+pytestmark = pytest.mark.unit
 
 
 def test_detect_language_hangul():

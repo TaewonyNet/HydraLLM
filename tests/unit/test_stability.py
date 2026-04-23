@@ -5,6 +5,8 @@ import pytest
 from src.domain.models import ChatMessage, ChatRequest
 from src.services.analyzer import ContextAnalyzer
 
+pytestmark = pytest.mark.unit
+
 
 def test_re_module_availability():
     """Verify that re module is available where needed."""

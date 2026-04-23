@@ -105,12 +105,14 @@ class GeminiAdapter(ILLMProvider):
                 f"Sending request to Gemini with model {model_name} (Files: {len(uploaded_files)})"
             )
 
-            # 네이티브 google_search 그라운딩은 현재 SDK 버전과 호환되지 않아
-            # tools 필드를 비우고, 웹 컨텍스트는 web_context_service 가 시스템
-            # 프롬프트에 주입한 결과를 그대로 사용한다.
+            # has_search=True 일 때 Gemini 네이티브 google_search grounding tool 을 전달.
+            # web_context_service 주입 방식과 별개로, 호출자가 명시적으로 검색을 요청한 경우에만 활성화.
+            tools: list[dict[str, Any]] | None = (
+                [{"google_search": {}}] if request.has_search else None
+            )
             response = await model.generate_content_async(
                 contents=contents,
-                tools=None,
+                tools=tools,
                 generation_config=genai.types.GenerationConfig(
                     temperature=request.temperature
                     if request.temperature is not None

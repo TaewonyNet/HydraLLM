@@ -2,12 +2,16 @@
 
 import time
 
+import pytest
+
 from src.utils.ulid import (
     generate_message_id,
     generate_part_id,
     generate_session_id,
     generate_ulid,
 )
+
+pytestmark = pytest.mark.unit
 
 
 class TestULID:

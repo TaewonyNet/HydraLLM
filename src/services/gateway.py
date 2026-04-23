@@ -49,7 +49,7 @@ class Gateway(IRouter):
         intent_classifier: IntentClassifier | None = None,
     ):
         self.key_manager = key_manager or KeyManager()
-        self.analyzer = analyzer or ContextAnalyzer(key_manager=self.key_manager)
+        self.analyzer = analyzer or ContextAnalyzer()
         self.session_manager = session_manager or SessionManager()
         self.scraper = scraper or WebScraper()
         self.compressor = compressor or ContextCompressor()
@@ -465,7 +465,7 @@ class Gateway(IRouter):
         if not response.usage:
             response.usage = {}
         idx = self.key_manager.get_key_index(provider, key)
-        
+
         # 라우팅 사유를 명확한 기술적 상수로 매핑
         reason_map = {
             "model_hint": "USER_HINT",

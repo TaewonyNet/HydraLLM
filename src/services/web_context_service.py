@@ -6,7 +6,7 @@ from typing import Any, cast
 
 from src.core.config import settings
 from src.domain.interfaces import ISessionManager
-from src.domain.models import ChatMessage, ChatRequest
+from src.domain.models import ChatRequest
 from src.i18n import t
 from src.services.analyzer import ContextAnalyzer
 from src.services.compressor import ContextCompressor

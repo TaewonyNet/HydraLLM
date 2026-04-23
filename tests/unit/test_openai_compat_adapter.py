@@ -5,6 +5,8 @@ import pytest
 from src.adapters.providers.openai_compat import OpenAICompatAdapter
 from src.domain.models import ChatMessage, ChatRequest
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.asyncio
 async def test_openai_compat_auto_model_mapping():

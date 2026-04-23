@@ -14,6 +14,8 @@ from src.core.exceptions import ResourceExhaustedError
 from src.domain.enums import ProviderType
 from src.services.key_manager import KeyManager
 
+pytestmark = pytest.mark.unit
+
 
 class TestKeyManager:
     def setup_method(self):

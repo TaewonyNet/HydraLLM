@@ -9,6 +9,8 @@ import pytest
 
 from src.services.session_manager import SessionManager
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture()
 def sm():

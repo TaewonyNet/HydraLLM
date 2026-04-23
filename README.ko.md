@@ -31,8 +31,7 @@
 │   ├── integration/              # gateway failover, auto-models, provider validation
 │   └── api/                      # FastAPI endpoint contract 테스트
 ├── static/                       # 통합 SPA (Playground + Dashboard)
-├── scripts/                      # analyze_logs.py (로그 분석 유틸리티)
-├── examples/                     # cURL / SDK 사용 예시
+├── scripts/                      # validate_flow.py (엔드 투 엔드 라우팅 검증기)
 ├── pyproject.toml                # Poetry, ruff, mypy, pytest 설정
 └── .env                          # 공급자 키와 런타임 설정 (gitignore 처리됨)
 ```
@@ -94,11 +93,13 @@ python -m pip install --upgrade pip
 
 > ⚠️ **pydantic v2 필수**: 이 프로젝트는 `pydantic>=2.5` 와 `pydantic-settings>=2.1` 를 요구합니다. 전역 `~/.local` 에 pydantic v1 이 남아 있으면 `ModuleNotFoundError: No module named 'pydantic._internal'` 이 발생하므로 반드시 가상환경을 사용하거나 `pip install --upgrade 'pydantic>=2.5'` 로 업그레이드하세요.
 
-### 2. 의존성 설치 (택 1)
+### 2. 의존성 설치
 
 ```bash
-# (A) pip
-pip install -r requirements.txt
+# (A) pip (PEP 517 / pyproject.toml)
+pip install .
+# (선택) 컨텍스트 압축 기능을 쓸 경우
+pip install '.[compression]'
 
 # (B) Poetry
 poetry install
@@ -161,6 +162,13 @@ mypy src/
 - **웹 의도 키워드 저장소** — `DATA_DIR`(기본 `data/`), `KEYWORD_EXTRACTION_MODEL`(Ollama 소형 LLM명; 미지정 시 정규식 폴백만 사용)
 
 전체 예시는 `.env.example`을 참고하세요. `.env`는 `.gitignore`에 포함되어 저장소에 커밋되지 않습니다.
+
+### 시크릿 취급 주의
+
+- `.env`는 공급자 키를 **평문**으로 저장하며 **로컬 파일**입니다. `.gitignore`에 이미 포함되어 있어 원격 저장소로는 푸시되지 않습니다.
+- 다만 "로컬 평문"은 안전의 보증이 아닙니다. 디스크 위의 다른 시크릿과 동일하게 취급하세요. 파일 권한을 `chmod 600 .env`로 제한하고, 파일 원본을 공유하거나 채팅/AI 어시스턴트/이슈 트래커/스크린샷/페어 프로그래밍 도구에 붙여 넣지 마세요. 키가 머신 밖으로 한 번이라도 나가면 (LLM 세션 트랜스크립트 포함) 탈취된 것으로 간주해야 합니다.
+- 실수로 키를 읽거나 붙여넣거나 로그에 남기거나 커밋한 경우 즉시 공급자 콘솔(Gemini / Groq / Cerebras)에서 **폐기 후 재발급**하고 `.env` 값을 교체한 뒤 서버를 재시작하세요.
+- 다수 개발자가 사용하는 환경이라면 OS 키체인, Vault, 1Password CLI, 클라우드 KMS 등 정식 시크릿 매니저에서 프로세스 시작 시점에 주입하세요. 동기화되는 dotfile(`~/.config`, 클라우드 백업 등)에 시크릿을 넣지 마세요.
 
 ## 알려진 이슈 (2026-04-15 검증)
 

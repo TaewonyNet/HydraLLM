@@ -31,8 +31,7 @@
 │   ├── integration/              # gateway failover, auto-models, provider validation
 │   └── api/                      # FastAPI endpoint contract tests
 ├── static/                       # Unified SPA (Playground + Dashboard)
-├── scripts/                      # analyze_logs.py (log analysis utility)
-├── examples/                     # cURL / SDK usage examples
+├── scripts/                      # validate_flow.py (end-to-end routing validator)
 ├── pyproject.toml                # Poetry, ruff, mypy, pytest configuration
 └── .env                          # Provider keys and runtime settings (gitignored)
 ```
@@ -94,11 +93,13 @@ python -m pip install --upgrade pip
 
 > ⚠️ **pydantic v2 required**: this project needs `pydantic>=2.5` and `pydantic-settings>=2.1`. If pydantic v1 is present in `~/.local`, you will see `ModuleNotFoundError: No module named 'pydantic._internal'`. Use a venv, or upgrade with `pip install --upgrade 'pydantic>=2.5'`.
 
-### 2. Install dependencies (pick one)
+### 2. Install dependencies
 
 ```bash
-# (A) pip
-pip install -r requirements.txt
+# (A) pip (PEP 517 / pyproject.toml)
+pip install .
+# (optional) enable the context-compression extra
+pip install '.[compression]'
 
 # (B) Poetry
 poetry install
@@ -161,6 +162,13 @@ Key variables:
 - **Web-intent keyword store** — `DATA_DIR` (default `data/`), `KEYWORD_EXTRACTION_MODEL` (Ollama small LLM name; regex fallback only when unset)
 
 See `.env.example` for the full list with example values. `.env` is listed in `.gitignore` and must not be committed.
+
+### Secrets handling
+
+- `.env` stores provider keys in **plaintext** and is **local-only**. It is already covered by `.gitignore`, so keys are not pushed to the remote repository.
+- Treat `.env` the same as any other secret store on disk: restrict file permissions (`chmod 600 .env`), never share the raw file, and never paste the contents into chat/AI assistants, issue trackers, screenshots, or pair-programming tools. Once a key leaves the machine — including into an LLM session transcript — it must be considered compromised.
+- If a key is ever read aloud, pasted, logged, or committed by mistake, **revoke and rotate it immediately** at the provider console (Gemini / Groq / Cerebras), then replace the value in `.env` and restart the server.
+- For shared environments, prefer a proper secret manager (OS keychain, Vault, 1Password CLI, cloud KMS) and populate `.env` at process start; do not check secrets into any dotfile that syncs to another host.
 
 ## Known Issues (validated 2026-04-16)
 
