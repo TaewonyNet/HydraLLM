@@ -108,6 +108,7 @@ def openclaw_agent(message: str, *, timeout: int = OPENCLAW_TIMEOUT) -> str:
         capture_output=True,
         text=True,
         timeout=timeout,
+        encoding="utf-8",
     )
     if proc.returncode != 0:
         raise RuntimeError(

@@ -27,7 +27,7 @@ def test_keyword_store_add_and_match(tmp_path: Path):
 
     file = tmp_path / "web_keywords.ko.json"
     assert file.exists()
-    assert json.loads(file.read_text()) == ["실시간 주가", "오늘 환율"]
+    assert json.loads(file.read_text(encoding="utf-8")) == ["실시간 주가", "오늘 환율"]
 
     assert store.matches("현재 실시간 주가 알려줘") == "실시간 주가"
     assert store.matches("한국 역사 알려줘") is None

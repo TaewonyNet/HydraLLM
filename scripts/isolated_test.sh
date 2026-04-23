@@ -80,10 +80,10 @@ python3 -m venv .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-# ─── 3. 패키지 설치 (README Step 2A) ───
+# ─── 3. 패키지 설치 (pyproject.toml 기반) ───
 echo "[3/5] 의존성 설치 중…"
 pip install --upgrade pip -q || { echo "pip upgrade 실패"; exit 2; }
-pip install '.[dev]' -q || { echo "pip install .[dev] 실패 (pyproject.toml)"; exit 2; }
+pip install -e ".[dev]" -q || { echo "의존성 설치 실패 (pip install .[dev])"; exit 2; }
 
 # Playwright chromium (scraper에 필요)
 if ! python -m playwright install chromium >/dev/null 2>&1; then

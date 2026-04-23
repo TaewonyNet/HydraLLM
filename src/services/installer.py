@@ -91,7 +91,7 @@ class InstallerService:
         if not config_path.exists():
             return False
         try:
-            data = json.loads(config_path.read_text())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning(f"openclaw.json read failed: {exc}")
             return False
@@ -120,7 +120,7 @@ class InstallerService:
         providers["openai"] = desired_provider
 
         try:
-            config_path.write_text(json.dumps(data, indent=2))
+            config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning(f"openclaw.json write failed: {exc}")
             return False
