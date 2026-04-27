@@ -23,6 +23,8 @@ def _get_project_id() -> str:
             capture_output=True,
             text=True,
             timeout=5,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode == 0:
             return hashlib.sha256(result.stdout.strip().encode()).hexdigest()[:12]

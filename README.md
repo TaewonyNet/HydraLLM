@@ -42,7 +42,7 @@
 2. **Circuit Breaker + Cloud Failover** — `services/gateway.py` wraps every provider with a `CircuitBreaker` (5-failure threshold, 60s recovery) and retries across the `PROVIDER_PRIORITY` chain (Gemini then Groq then Cerebras).
 3. **Final Local Fallback** — When all cloud providers are exhausted, the Gateway routes to Ollama via `OpenAICompatAdapter` pointing at `OLLAMA_BASE_URL`.
 4. **Key Rotation with Cooldowns** — `services/key_manager.py::KeyManager` maintains per-provider pools, selects keys randomly from the active set, and applies longer cooldowns for quota (1h) or forbidden/403 (24h) errors.
-5. **Web Enrichment** — `services/web_context_service.py` + `services/scraper.py::WebScraper` (Playwright + Scrapling) fetch explicit URLs or perform scraping when web intent is detected, with a 24-hour SQLite cache.
+5. **Web Enrichment** — `services/web_context_service.py` + `services/scraper.py::WebScraper` (Playwright + Scrapling) fetch explicit URLs or perform scraping when web intent is detected, with a 24-hour SQLite cache. When the gateway successfully injects a web context block into `request.messages[-2]`, it emits a stdout INFO line `Web context injected: N chars (session=...)` so operators can confirm enrichment without reading the SQLite event store.
 6. **Context Compression** — `services/compressor.py::ContextCompressor` uses LLMLingua-2 (optional `compression` extra) to prune long histories.
 7. **Session Persistence** — `services/session_manager.py::SessionManager` stores messages and parts in SQLite (WAL), supports forking and compaction thresholds, and holds runtime settings.
 8. **Unified Admin UI** — Single SPA at `/ui` combining playground, dashboard, key status, and model catalogue; all fetches use absolute URLs for proxy stability.
@@ -97,15 +97,17 @@ python -m pip install --upgrade pip
 
 ```bash
 # (A) pip (PEP 517 / pyproject.toml)
-pip install .
-# (optional) enable the context-compression extra
-pip install '.[compression]'
+pip install .                       # runtime only
+pip install '.[dev]'                # + pytest / pytest-asyncio / pytest-cov / mypy / ruff
+pip install '.[dev,compression]'    # + llmlingua (context compression)
+pip install '.[compression]'        # compression only
 
 # (B) Poetry
-poetry install
-# (optional) enable the context-compression extra
-poetry install -E compression
+poetry install                   # runtime + dev group (default)
+poetry install -E compression    # + context compression
 ```
+
+> `[tool.poetry.extras]` declares a `dev` extra, so you can install the full test / lint / type-check toolchain from `pyproject.toml` alone via `pip install '.[dev]'` — no Poetry required. Quote the argument because many shells treat `[...]` as a glob.
 
 ### 3. Install Playwright browsers
 
@@ -136,7 +138,7 @@ curl http://127.0.0.1:8000/   # {"status":"online", ...}
 python main.py
 python main.py --debug --port 8001
 
-# Tests
+# Tests (current baseline: 106 passed)
 pytest                    # full suite
 pytest -m unit            # unit tests only
 pytest -m integration     # integration tests only
@@ -146,7 +148,20 @@ pytest tests/unit/test_analyzer.py::test_auto_routing   # single test
 ruff check .
 ruff check --fix .
 mypy src/
+
+# Reproducible isolated full-suite run (clones source to a temp dir,
+#   fresh venv, pip install '.[dev]', pytest, and parses the pass/fail count).
+# If .env is missing, the script falls back to .env.example automatically.
+EXPECTED_TESTS=106 scripts/isolated_test.sh --clean              # Linux / macOS / Git Bash
+powershell -ExecutionPolicy Bypass -File scripts/isolated_test.ps1   # Korean Windows (cp949-safe)
 ```
+
+### Korean Windows (cp949) notes
+
+- `src/core/logging.py` pins `RotatingFileHandler(..., encoding="utf-8")` and reconfigures `sys.stdout` to UTF-8.
+- `src/services/session_manager.py::_get_project_id` passes `encoding="utf-8", errors="replace"` to `subprocess.run`, so repo paths containing Korean characters no longer raise `UnicodeDecodeError`.
+- `scripts/isolated_test.sh` exports `PYTHONUTF8=1 / PYTHONIOENCODING=utf-8 / LC_ALL=C.UTF-8` before running pip / pytest. It also falls back to `cp -a` when `rsync` is missing (typical Git Bash install) and detects `.venv/Scripts/activate` vs `.venv/bin/activate` for Windows-native venvs.
+- The PowerShell counterpart runs `chcp 65001` + `[Console]::OutputEncoding = UTF8`, copies via `robocopy`, and persists the pytest log through `[System.IO.File]::WriteAllLines(..., UTF8Encoding(false))` instead of `Tee-Object` to avoid the UTF-16 LE default in Windows PowerShell 5.1. Prefer `isolated_test.ps1` on native Korean Windows.
 
 ## Configuration
 
@@ -170,12 +185,13 @@ See `.env.example` for the full list with example values. `.env` is listed in `.
 - If a key is ever read aloud, pasted, logged, or committed by mistake, **revoke and rotate it immediately** at the provider console (Gemini / Groq / Cerebras), then replace the value in `.env` and restart the server.
 - For shared environments, prefer a proper secret manager (OS keychain, Vault, 1Password CLI, cloud KMS) and populate `.env` at process start; do not check secrets into any dotfile that syncs to another host.
 
-## Known Issues (validated 2026-04-16)
+## Known Issues (validated 2026-04-27)
 
-- **pytest (unit)**: 52/52 passed. Integration test `test_auto_models_functionality` may fail when the local Ollama instance returns an embedding-only model for chat (see `TROUBLESHOOTING.md` section 12).
+- **pytest (full suite)**: 106/106 passed in both source and isolated venv (`scripts/isolated_test.sh --clean`). Integration test `test_auto_models_functionality` may still fail when the local Ollama instance returns an embedding-only model for chat (see `TROUBLESHOOTING.md` section 12).
 - **mypy**: 0 errors (`mypy src/`). Pydantic v2 mypy plugin enabled.
 - **ruff (src/)**: 0 errors. Test files retain `E402` import-order violations due to `sys.path` manipulation (by design).
 - **Version**: `pyproject.toml` and `src/app.py` both declare `1.3.0`.
+- **Web context vs key exhaustion**: when all cloud key pools are in cooldown (forbidden=24h, quota=1h), the gateway routes to the local Ollama fallback. The web search/scrape result IS still injected into `request.messages` (look for the new `Web context injected: N chars` INFO log in `gateway.log`); the limiting factor in that scenario is the local model's capacity, not the enrichment pipeline. Use `POST /v1/admin/probe` to re-validate keys, or `POST /v1/admin/keys` to inject fresh keys at runtime.
 
 ---
-*Last Updated: 2026-04-16*
+*Last Updated: 2026-04-27*

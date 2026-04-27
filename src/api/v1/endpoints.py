@@ -17,13 +17,17 @@ from src.services.admin_service import AdminService
 from src.services.comm_logger import comm_log_buffer
 from src.services.gateway import Gateway
 from src.services.installer import InstallerService
+from src.services.intent_classifier import IntentClassifier
 from src.services.key_manager import KeyManager
+from src.services.keyword_store import KeywordStore
 
 from .dependencies import (
     get_admin_service,
     get_gateway,
     get_installer_service,
+    get_intent_classifier,
     get_key_manager,
+    get_keyword_store,
     verify_admin_auth,
 )
 
@@ -356,3 +360,46 @@ async def clear_comm_logs(
     """공급자 통신 디버그 로그 초기화."""
     comm_log_buffer.clear()
     return {"status": "success"}
+
+
+# ─── Web Intent Keyword Store ───
+
+
+@router.get("/admin/intent/keywords")
+async def list_intent_keywords(
+    keyword_store: KeywordStore = Depends(get_keyword_store),
+    authenticated: bool = Depends(verify_admin_auth),
+) -> dict[str, list[str]]:
+    """언어별 웹-인텐트 키워드 전체 조회."""
+    return keyword_store.list_all()
+
+
+@router.post("/admin/intent/keywords")
+async def add_intent_keywords(
+    payload: dict[str, Any] = Body(...),
+    keyword_store: KeywordStore = Depends(get_keyword_store),
+    authenticated: bool = Depends(verify_admin_auth),
+) -> dict[str, Any]:
+    """언어별 웹-인텐트 키워드 수동 등록. body: {lang, keywords[]}."""
+    lang = payload.get("lang")
+    keywords = payload.get("keywords")
+    if not isinstance(lang, str) or not lang.strip():
+        raise HTTPException(status_code=400, detail="lang (string) is required")
+    if not isinstance(keywords, list) or not all(isinstance(k, str) for k in keywords):
+        raise HTTPException(status_code=400, detail="keywords (list[str]) is required")
+    added = keyword_store.add(lang, keywords)
+    return {"status": "success", "lang": lang, "added": added}
+
+
+@router.post("/admin/intent/keywords/learn")
+async def learn_intent_keywords(
+    payload: dict[str, Any] = Body(...),
+    intent_classifier: IntentClassifier = Depends(get_intent_classifier),
+    authenticated: bool = Depends(verify_admin_auth),
+) -> dict[str, Any]:
+    """false-negative 쿼리에서 키워드를 추출해 저장. body: {query}."""
+    query = payload.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise HTTPException(status_code=400, detail="query (string) is required")
+    added = await intent_classifier.learn_from_missed_query(query)
+    return {"status": "success", "query": query, "added": added}

@@ -42,7 +42,7 @@
 2. **회로 차단기와 클라우드 페일오버** — `services/gateway.py`가 모든 공급자 호출을 `CircuitBreaker`(실패 5회 임계값, 60초 복구)로 감싸며, `PROVIDER_PRIORITY` 체인(Gemini → Groq → Cerebras)을 따라 재시도합니다.
 3. **최종 로컬 폴백** — 모든 클라우드 공급자가 소진되면 Gateway가 `OpenAICompatAdapter`로 `OLLAMA_BASE_URL`의 Ollama에 라우팅합니다.
 4. **쿨다운 기반 키 로테이션** — `services/key_manager.py::KeyManager`가 공급자별 풀을 유지하며, 활성 키 집합에서 랜덤하게 선택하고, 쿼터(1시간) 또는 거부/403(24시간) 오류에 대해 더 긴 쿨다운을 적용합니다.
-5. **웹 보강** — `services/web_context_service.py`와 `services/scraper.py::WebScraper`(Playwright + Scrapling)가 명시적 URL을 가져오거나 웹 의도 감지 시 스크래핑을 수행하며, 24시간 SQLite 캐시를 사용합니다.
+5. **웹 보강** — `services/web_context_service.py`와 `services/scraper.py::WebScraper`(Playwright + Scrapling)가 명시적 URL을 가져오거나 웹 의도 감지 시 스크래핑을 수행하며, 24시간 SQLite 캐시를 사용합니다. 게이트웨이가 웹 컨텍스트 블록을 `request.messages[-2]` 위치에 주입하면 stdout 에 `Web context injected: N chars (session=...)` INFO 로그를 함께 남겨, SQLite 이벤트 스토어를 열어보지 않고도 보강 적용 여부를 즉시 확인할 수 있습니다.
 6. **컨텍스트 압축** — `services/compressor.py::ContextCompressor`가 LLMLingua-2(선택적 `compression` extra)를 사용해 긴 히스토리를 축소합니다.
 7. **세션 영속화** — `services/session_manager.py::SessionManager`가 SQLite(WAL)에 메시지와 파트를 저장하고, 포킹 및 compaction 임계값을 지원하며, 런타임 설정을 보관합니다.
 8. **통합 관리 UI** — `/ui`에서 playground, dashboard, 키 상태, 모델 카탈로그를 하나의 SPA로 제공하며, 모든 fetch 호출은 프록시 안정성을 위해 절대 URL을 사용합니다.
@@ -97,15 +97,17 @@ python -m pip install --upgrade pip
 
 ```bash
 # (A) pip (PEP 517 / pyproject.toml)
-pip install .
-# (선택) 컨텍스트 압축 기능을 쓸 경우
-pip install '.[compression]'
+pip install .                       # 런타임만
+pip install '.[dev]'                # + pytest / pytest-asyncio / pytest-cov / mypy / ruff
+pip install '.[dev,compression]'    # + llmlingua (컨텍스트 압축)
+pip install '.[compression]'        # 압축 기능만
 
 # (B) Poetry
-poetry install
-# (선택) 컨텍스트 압축 기능을 쓸 경우
-poetry install -E compression
+poetry install                   # 런타임 + dev (group.dev.dependencies 기본 포함)
+poetry install -E compression    # + 컨텍스트 압축
 ```
+
+> `[tool.poetry.extras]` 에 `dev` extra 가 선언되어 있으므로, Poetry 가 없어도 `pip install '.[dev]'` 한 줄로 테스트·린트·타입체크 도구까지 전부 `pyproject.toml` 기준으로 설치됩니다. 셸에 따라 대괄호 이스케이프가 필요하므로 **따옴표 필수**.
 
 ### 3. Playwright 브라우저 바이너리 설치
 
@@ -136,7 +138,7 @@ curl http://127.0.0.1:8000/   # {"status":"online", ...}
 python main.py
 python main.py --debug --port 8001
 
-# 테스트
+# 테스트 (현재 baseline: 106 passed)
 pytest                    # 전체 스위트
 pytest -m unit            # 단위 테스트만
 pytest -m integration     # 통합 테스트만
@@ -146,7 +148,19 @@ pytest tests/unit/test_analyzer.py::test_auto_routing   # 특정 테스트
 ruff check .
 ruff check --fix .
 mypy src/
+
+# 재현형 격리 전수 테스트 (임시 디렉터리로 복제 → 새 venv → pip install .[dev] → pytest)
+#   .env 가 없으면 .env.example 로 자동 fallback.
+EXPECTED_TESTS=106 scripts/isolated_test.sh --clean           # Linux / macOS / Git Bash
+powershell -ExecutionPolicy Bypass -File scripts/isolated_test.ps1   # 한글 Windows (cp949 안전)
 ```
+
+### 한글 Windows(cp949) 노트
+
+- `src/core/logging.py` 의 `RotatingFileHandler` 는 `encoding="utf-8"` 로 고정되며, `sys.stdout.reconfigure` 를 통해 콘솔 출력도 UTF-8 로 재설정합니다.
+- `src/services/session_manager.py::_get_project_id` 는 `subprocess.run(..., encoding="utf-8", errors="replace")` 를 사용해 git root 경로에 한글이 있어도 디코딩 실패 없이 동작합니다.
+- `scripts/isolated_test.sh` 는 실행 전에 `PYTHONUTF8=1 / PYTHONIOENCODING=utf-8 / LC_ALL=C.UTF-8 / LANG=C.UTF-8` 를 export 하고 Git Bash 환경에서는 `chcp.com 65001` 을 선제 호출합니다. 또한 `rsync` 미설치 시 `cp -a` 로 자동 fallback 하고, venv activate 경로를 `.venv/Scripts/activate`(Windows) vs `.venv/bin/activate`(POSIX) 로 자동 선택합니다.
+- PowerShell 스크립트는 `chcp 65001` + `[Console]::OutputEncoding=UTF8` + `$env:PYTHONUTF8="1"` 설정과 `robocopy` 기반 복제를 사용하며, pytest 로그를 PS 5.1 의 `Tee-Object` 대신 `[System.IO.File]::WriteAllLines(..., UTF8Encoding(false))` 로 직접 UTF-8(BOM 없음) 저장합니다. 네이티브 한글 Windows 는 **PowerShell 스크립트를 우선 사용**하세요.
 
 ## 설정
 
@@ -170,36 +184,25 @@ mypy src/
 - 실수로 키를 읽거나 붙여넣거나 로그에 남기거나 커밋한 경우 즉시 공급자 콘솔(Gemini / Groq / Cerebras)에서 **폐기 후 재발급**하고 `.env` 값을 교체한 뒤 서버를 재시작하세요.
 - 다수 개발자가 사용하는 환경이라면 OS 키체인, Vault, 1Password CLI, 클라우드 KMS 등 정식 시크릿 매니저에서 프로세스 시작 시점에 주입하세요. 동기화되는 dotfile(`~/.config`, 클라우드 백업 등)에 시크릿을 넣지 마세요.
 
-## 알려진 이슈 (2026-04-15 검증)
-
-다음 항목은 본 문서 업데이트 시점에 의도적으로 추적만 유지하고 있는 상태입니다. 상세 실행 내역은 `TROUBLESHOOTING.ko.md` 열한 번째 이하 섹션을 참고하세요.
+## 알려진 이슈 (2026-04-27 검증)
 
 ### 테스트 결과 요약
 
-- **unit + api 테스트**: 63개 모두 통과
-- **integration 테스트(빠른 하위집합, `test_integration.py` 외)**: 6 통과, 1 실패
-  - 실패: `tests/integration/test_integration.py::TestIntegration::test_admin_keys_endpoint` — `POST /v1/admin/keys`가 JSON 바디만으로 호출되면 `422`를 반환합니다. 엔드포인트 시그니처(`provider: str, keys: list[str] = Body(...)`)가 `provider`를 쿼리 파라미터로 해석하기 때문입니다.
-- **네트워크 의존 통합 테스트(`test_auto_models.py`, `test_auto_models_functionality.py`)**: 실제 Gemini/Groq/Cerebras/Ollama 호출을 수행하므로 실행 시간이 길고 외부 쿼터에 따라 결과가 달라집니다. `test_auto_models_functionality`는 최종 로컬 폴백이 Ollama의 첫 번째 모델을 선택할 때 임베딩 전용 모델(`bge-m3:latest` 등)이 선택되면 Ollama가 `400 does not support chat`로 거절하여 실패할 수 있습니다.
+- **전수 pytest**: **106 passed / 0 failed** — 소스 환경과 격리 환경(`scripts/isolated_test.sh --clean`) 모두에서 동일하게 통과합니다. `EXPECTED_TESTS=106` 으로 기대치를 갱신하세요.
+- **mypy**: `mypy src/` 0 errors. Pydantic v2 mypy 플러그인 활성화 상태 유지.
+- **ruff (`src/`)**: 0 errors. `tests/` 의 `E402` import-order 위반은 `sys.path` 조작 규약 때문이며 의도적으로 유지됩니다.
+- **버전**: `pyproject.toml` 과 `src/app.py` 모두 `1.3.0`.
+- **네트워크 의존 통합 테스트**: `test_auto_models_functionality` 는 최종 로컬 폴백이 Ollama 의 임베딩 전용 모델(`bge-m3:latest` 등)을 chat 으로 선택하면 `400 does not support chat` 로 실패할 수 있습니다 (`TROUBLESHOOTING.ko.md` 12 절 참조). 클라우드 키가 모두 살아 있을 때는 영향 없음.
 
-### mypy 경고 (`mypy src/` — 약 35건, 10개 파일)
+### 웹 컨텍스트와 키 소진의 분리
 
-- `services/admin_service.py:48` — `AdminService.delete_session`이 `session_manager.delete_session`을 호출하지만 `SessionManager`에는 해당 메서드가 없습니다. `DELETE /v1/admin/sessions/{id}` 호출 시 런타임 `AttributeError`가 발생할 가능성이 있습니다. `ISessionManager`에는 `clear_session` 및 `fork_session`만 정의되어 있습니다.
-- `services/analyzer.py:104`, `adapters/providers/gemini.py:81` — Pydantic v2 mypy 플러그인 미설정으로 `RoutingDecision` / `ChatMessage`에 대한 "missing named argument" 허위 경고가 발생합니다. 런타임에는 필드에 기본값이 있습니다.
-- `services/gateway.py:211,214` — `all_parts` 원소의 `dict | BaseModel` 타입 내로잉과 `msg.model_extra` 할당이 현재 타이핑에서 유지되지 않습니다.
-- `services/key_manager.py:117` — `cooldown_seconds`가 한쪽 분기에서는 `int`, 다른 쪽에서는 `timedelta.total_seconds()`(float)로 할당되어 타입이 흔들립니다.
-- `services/scraper.py:13-15` — `ProxySpec`이 타이핑 별칭으로 import된 후 동일 이름의 클래스로 재정의되었습니다.
-- `services/context_manager.py`, `services/session_manager.py`, `api/v1/endpoints.py`, `app.py` — 일부 함수에 반환 어노테이션이 누락되어 있습니다.
+모든 클라우드 풀이 쿨다운(403/forbidden=24h, quota=1h)에 들어가면 게이트웨이는 즉시 Ollama 로컬 폴백 경로로 전환됩니다. 이때도 웹 검색/스크래핑 결과는 `request.messages[-2]` 위치에 정상적으로 주입되며, `gateway.log` 에 다음과 같은 한 줄이 남습니다.
 
-### ruff 린트 경고 (`ruff check .` — 약 54건, 런타임 차단 없음)
+```
+... services.gateway - INFO - Web context injected: 8049 chars into request.messages[-2] (session=...)
+```
 
-- `B904` 14건 `api/v1/endpoints.py` — `except` 블록 내 `raise HTTPException(...)`에서 `raise ... from err` 누락.
-- `F403` `src/domain/{enums,interfaces,schemas}/__init__.py` — 와일드카드 재export.
-- `E402` 일부 테스트 파일 — `tests/AGENTS.md` 규약에 따라 `sys.path` 조작 이후에 `src`에서 import.
-- `EM101/EM102` `gemini.py`, `gateway.py`, `F841` 미사용 `last_exception`, `F401` 미사용 `re` import.
-
-### 버전 드리프트
-
-- `pyproject.toml`은 `1.3.0`으로 선언되어 있으나 `src/app.py`의 `create_app`이 여전히 `FastAPI(version="1.0.0")`을 생성하여 OpenAPI 스펙에는 구 버전이 노출됩니다.
+이 로그가 보이는데도 응답 품질이 낮다면 원인은 **웹 보강 실패가 아니라 폴백 모델의 용량 한계**입니다. 즉시 조치는 `POST /v1/admin/probe` 로 키 재검증을 시도하거나, `POST /v1/admin/keys` 로 유효한 신규 키를 런타임 주입하거나, Ollama 측에 더 큰 모델을 pull 해 두는 방향이 됩니다.
 
 ---
-*마지막 업데이트: 2026-04-15*
+*마지막 업데이트: 2026-04-27*

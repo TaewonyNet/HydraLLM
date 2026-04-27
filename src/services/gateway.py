@@ -185,6 +185,13 @@ class Gateway(IRouter):
                 name="web_context",
             )
             request.messages.insert(-1, injection)
+            # stdout 가시성: 웹 컨텍스트 주입이 실제로 수행됐음을 gateway.log 에 남겨
+            # "exhausted → local fallback" 흐름만 보이는 로그 비대칭을 해소한다.
+            logger.info(
+                "Web context injected: %d chars into request.messages[-2] (session=%s)",
+                len(web_text),
+                request.session_id,
+            )
 
         llm_start = time.perf_counter()
         try:
