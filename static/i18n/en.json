@@ -25,6 +25,7 @@
     "placeholder": "Type your question... (Press Enter to send)",
     "send": "Send",
     "thinking": "Thinking...",
+    "strict_mode": "Strict Model Test (No Auto-routing)",
     "auto_fetch": "Auto Web Fetching",
     "web_search": "Web Search Boost",
     "compress": "Context Compression (Lingua)",

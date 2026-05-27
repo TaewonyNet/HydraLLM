@@ -29,10 +29,12 @@ from src.services.intent_classifier import IntentClassifier
 from src.services.key_manager import KeyManager
 from src.services.metrics_service import MetricsService
 from src.services.observability import Observability
+from src.services.resilience_manager import ResilienceManager
 from src.services.scraper import WebScraper
 from src.services.session_manager import SessionManager
 from src.services.session_orchestrator import SessionOrchestrator
 from src.services.web_context_service import WebContextService
+from src.services.web_coordinator import WebEnrichmentCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,7 @@ class Gateway(IRouter):
             self.session_manager,
             intent_classifier=self.intent_classifier,
         )
+        self.web_coordinator = WebEnrichmentCoordinator(self.web_context, self.session_manager)
         self.sessions = SessionOrchestrator(self.session_manager, self.compressor)
 
         self.max_retries = 3
@@ -72,6 +75,18 @@ class Gateway(IRouter):
         self._breakers: dict[ProviderType, CircuitBreaker] = {
             p: CircuitBreaker() for p in ProviderType
         }
+        self.resilience = ResilienceManager(
+            self.key_manager,
+            self.analyzer,
+            self._breakers,
+            self.session_manager,
+            self.max_retries,
+            get_provider_adapter=self._get_provider_adapter,
+            process_with_agent=self._process_with_agent_wrap,
+        )
+
+    async def _process_with_agent_wrap(self, request: ChatRequest, decision: RoutingDecision) -> ChatResponse:
+        return await self._process_with_agent(request, decision)
 
     async def process_request(
         self, request: ChatRequest, endpoint: str = "chat"
@@ -160,42 +175,11 @@ class Gateway(IRouter):
         if decision:
             request.model = decision.model_name
 
-        web_start = time.time()
-        web_res = await self.web_context.enrich_request(request)
-        web_parts, web_text = web_res if isinstance(web_res, tuple) else ([], None)
-        web_latency = time.time() - web_start
-        Observability.record_step("web_enrichment", web_latency)
-
-        if web_text:
-            await self.session_manager.log_system_event(
-                level="INFO",
-                category="WEB_ENRICH",
-                message=f"Web context enriched for session {request.session_id} ({len(web_text)} chars)",
-                metadata={"request_id": request_id, "latency": web_latency},
-            )
-            injection = ChatMessage(
-                role="system",
-                content=(
-                    "--- REAL-TIME WEB CONTEXT START ---\n"
-                    "The following information was retrieved from the web specifically for this turn. "
-                    "Use this as the absolute source of truth for the final response.\n\n"
-                    f"{web_text}\n"
-                    "--- REAL-TIME WEB CONTEXT END ---"
-                ),
-                name="web_context",
-            )
-            request.messages.insert(-1, injection)
-            # stdout 가시성: 웹 컨텍스트 주입이 실제로 수행됐음을 gateway.log 에 남겨
-            # "exhausted → local fallback" 흐름만 보이는 로그 비대칭을 해소한다.
-            logger.info(
-                "Web context injected: %d chars into request.messages[-2] (session=%s)",
-                len(web_text),
-                request.session_id,
-            )
+        web_parts, web_text = await self.web_coordinator.enrich(request, request_id)
 
         llm_start = time.perf_counter()
         try:
-            response, retry_parts = await self._execute_with_full_resilience(
+            response, retry_parts = await self.resilience.execute_with_resilience(
                 request, decision
             )
             latency_ms = int((time.perf_counter() - llm_start) * 1000)
@@ -317,182 +301,6 @@ class Gateway(IRouter):
             }
         return tiers
 
-    async def _execute_with_full_resilience(
-        self, request: ChatRequest, decision: RoutingDecision
-    ) -> tuple[ChatResponse, list[dict[str, Any]]]:
-        retry_parts: list[dict[str, Any]] = []
-
-        is_strict = False
-        original_hint = request.model.lower() if request.model else ""
-        if "/" in original_hint:
-            parts = original_hint.split("/")
-            if parts[1] == "auto" or parts[0] in [p.value for p in ProviderType]:
-                is_strict = True
-                logger.info(f"Using STRICT routing for {original_hint}")
-
-        providers_to_try = []
-        if decision.provider:
-            providers_to_try.append(decision.provider)
-
-        if not providers_to_try or (original_hint in ["auto", "default", "mllm/auto"]):
-            has_any_cloud_active = False
-            for p in [ProviderType.GEMINI, ProviderType.GROQ, ProviderType.CEREBRAS]:
-                if self.key_manager.get_available_keys_count(p) > 0:
-                    has_any_cloud_active = True
-                    break
-            if not has_any_cloud_active and not is_strict:
-                logger.warning("No cloud keys available. Skipping cloud attempts.")
-                return await self._final_fallback(request, decision), retry_parts
-
-        if not is_strict:
-            for p_name in self.analyzer.provider_priority:
-                try:
-                    p_type = ProviderType(p_name)
-                    if p_type not in providers_to_try:
-                        providers_to_try.append(p_type)
-                except (ValueError, KeyError):
-                    continue
-
-        for provider_type in providers_to_try:
-            if not self._breakers[provider_type].is_available():
-                logger.warning(f"Skipping {provider_type.value}: Circuit is OPEN")
-                if is_strict:
-                    msg = f"Strict provider {provider_type.value} is currently unavailable (Circuit OPEN)"
-                    raise ResourceExhaustedError(msg)
-                continue
-
-            if provider_type != decision.provider:
-                new_model = self.analyzer.get_default_model_for_provider(provider_type)
-                logger.info(
-                    f"Switching provider to {provider_type.value}, model to {new_model}"
-                )
-                request.model = new_model
-                decision.model_name = new_model
-                decision.provider = provider_type
-
-            for attempt in range(self.max_retries):
-                api_key: str | None = None
-                try:
-                    api_key = await self.key_manager.get_next_key(provider_type)
-                    adapter = self._get_provider_adapter(provider_type, api_key)
-
-                    comm_log_buffer.record(
-                        "request",
-                        provider_type.value,
-                        {
-                            "model": request.model,
-                            "messages_count": len(request.messages or []),
-                            "has_search": request.has_search,
-                            "stream": request.stream,
-                        },
-                    )
-
-                    response = await adapter.generate(request, api_key)
-
-                    comm_log_buffer.record(
-                        "response",
-                        provider_type.value,
-                        {
-                            "model": response.model,
-                            "finish_reasons": [
-                                c.finish_reason for c in (response.choices or [])
-                            ],
-                            "usage": response.usage,
-                        },
-                    )
-
-                    self._breakers[provider_type].report_success()
-                    await self.key_manager.report_success(provider_type, api_key)
-                    self._enrich_response_usage(
-                        response, provider_type, api_key, decision
-                    )
-                    return response, retry_parts
-
-                except (RateLimitError, ResourceExhaustedError) as e:
-                    self._breakers[provider_type].report_failure()
-                    if api_key:
-                        await self.key_manager.report_failure(provider_type, api_key, e)
-
-                    if self.key_manager.get_available_keys_count(provider_type) == 0:
-                        logger.warning(
-                            f"Provider {provider_type.value} exhausted. Checking fallback..."
-                        )
-                        if is_strict:
-                            raise e
-                        break
-
-                    if attempt < self.max_retries - 1:
-                        await asyncio.sleep(1)
-
-                except ServiceUnavailableError as e:
-                    logger.error(f"Service error with {provider_type.value}: {e}")
-                    self._breakers[provider_type].report_failure()
-                    if api_key:
-                        await self.key_manager.report_failure(provider_type, api_key, e)
-                    if self.key_manager.get_available_keys_count(provider_type) == 0:
-                        if is_strict:
-                            raise e
-                        break
-                    if attempt < self.max_retries - 1:
-                        await asyncio.sleep(1)
-
-                except Exception as e:
-                    logger.error(f"Unexpected error with {provider_type.value}: {e}")
-                    err_msg = str(e).lower()
-                    if api_key and (
-                        "403" in err_msg
-                        or "denied" in err_msg
-                        or "api_key_invalid" in err_msg
-                        or "unauthorized" in err_msg
-                    ):
-                        await self.key_manager.report_failure(provider_type, api_key, e)
-                    if attempt < self.max_retries - 1:
-                        await asyncio.sleep(1)
-                    else:
-                        break
-
-        return await self._final_fallback(request, decision), retry_parts
-
-    async def _final_fallback(
-        self, request: ChatRequest, decision: RoutingDecision
-    ) -> ChatResponse:
-        logger.warning("All primary paths failed. Triggering final local fallback.")
-        decision.agent = AgentType.OLLAMA
-        decision.model_name = ""
-        request.model = ""
-        return await self._process_with_agent(request, decision)
-
-    def _enrich_response_usage(
-        self,
-        response: ChatResponse,
-        provider: ProviderType,
-        key: str,
-        decision: RoutingDecision,
-    ) -> None:
-        if not response.usage:
-            response.usage = {}
-        idx = self.key_manager.get_key_index(provider, key)
-
-        # 라우팅 사유를 명확한 기술적 상수로 매핑
-        reason_map = {
-            "model_hint": "USER_HINT",
-            "token_count": "TOKEN_OPTIMIZED",
-            "image_present": "MULTIMODAL_ANALYSIS",
-            "WEB_INTENT_REQUIRE_INTELLIGENCE": "WEB_INTENT_SEARCH",
-            "key_availability": "KEY_AVAILABILITY",
-        }
-        display_reason = reason_map.get(decision.reason, str(decision.reason).upper())
-
-        response.usage.update(
-            {
-                "gateway_provider": provider.value,
-                "gateway_key_index": idx,
-                "gateway_model": decision.model_name,
-                "routing_reason": display_reason,
-            }
-        )
-
-    # --- 기존 헬퍼 메서드 유지 및 최적화 ---
     def _get_provider_adapter(
         self, provider: ProviderType, api_key: str
     ) -> ILLMProvider:
@@ -610,9 +418,10 @@ class Gateway(IRouter):
         adapter = self._get_agent_adapter(agent)
         resp = await adapter.generate(request, "local-agent")
 
-        full_model_path = f"LOCAL-AGENT/{agent.value}/{decision.model_name}"
+        full_model_path = f"LOCAL-AGENT/{agent.value.upper()}/{decision.model_name}"
         if decision.model_name.startswith(agent.value + "/"):
-            full_model_path = f"LOCAL-AGENT/{decision.model_name}"
+            m_parts = decision.model_name.split("/", 1)
+            full_model_path = f"LOCAL-AGENT/{m_parts[0].upper()}/{m_parts[1]}"
 
         if not resp.usage:
             resp.usage = {}
@@ -694,6 +503,7 @@ class Gateway(IRouter):
         return await self.process_request(request)
 
     def get_supported_models(self) -> list[dict[str, Any]]:
+
         return self.analyzer.get_supported_models_info()
 
     def get_all_models(self) -> list[dict[str, Any]]:

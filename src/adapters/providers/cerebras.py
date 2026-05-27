@@ -17,7 +17,7 @@ class CerebrasAdapter(ILLMProvider):
     def __init__(self, api_key: str):
         http_client = httpx.AsyncClient(timeout=30)
         self.client = AsyncOpenAI(
-            base_url="https://api.cerebras.net/v1",
+            base_url="https://api.cerebras.ai/v1",
             api_key=api_key,
             http_client=http_client,
         )

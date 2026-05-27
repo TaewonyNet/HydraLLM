@@ -25,6 +25,7 @@
     "placeholder": "질문을 입력하세요... (Enter 키로 전송)",
     "send": "전송",
     "thinking": "Thinking...",
+    "strict_mode": "고정 모델 테스트 (자동 라우팅 해제)",
     "auto_fetch": "자동 웹 페칭",
     "web_search": "웹 검색 강화",
     "compress": "컨텍스트 압축 (Lingua)",

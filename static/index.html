@@ -139,6 +139,7 @@
                     <div class="card">
                         <h3 style="margin-top:0;" data-i18n="chat.reason_opts">추론 옵션</h3>
                         <div style="display:flex; flex-direction:column; gap:12px; font-size:0.85rem;">
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="strict-mode-check"><span data-i18n="chat.strict_mode">고정 모델 테스트 (자동 라우팅 해제)</span></label>
                             <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="auto-fetch-check" checked><span data-i18n="chat.auto_fetch">자동 웹 페칭</span></label>
                             <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="search-check"><span data-i18n="chat.web_search">웹 검색 강화</span></label>
                             <label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" id="compress-check" checked><span data-i18n="chat.compress">컨텍스트 압축 (Lingua)</span></label>
@@ -461,9 +462,36 @@
             document.getElementById('send-btn').disabled = true;
             const loading = document.createElement('div'); loading.className = 'message msg-assistant loading'; loading.textContent = 'Thinking...'; document.getElementById('chat-history').appendChild(loading);
             try {
+                let model = document.getElementById('model-select').value;
+                const isStrict = document.getElementById('strict-mode-check').checked;
+                
+                if (model !== 'auto') {
+                    const modelObj = availableModels.find(m => m.id === model);
+                    if (modelObj) {
+                        if (isStrict) {
+                            // 고정 모델 모드: provider/model 형식으로 강제 변환하여 자동 라우팅 우회
+                            const provider = modelObj.owned_by === 'local-agent' ? 'LOCAL-AGENT' : modelObj.owned_by;
+                            const prefix = provider.toUpperCase();
+                            
+                            if (modelObj.owned_by === 'local-agent') {
+                                // 로컬 에이전트: LOCAL-AGENT/AGENT/MODEL 형식 생성
+                                // m.id가 이미 LOCAL-AGENT/OLLAMA/phi4:latest 형식임
+                                model = modelObj.id;
+                            } else {
+                                // 클라우드 프로바이더: PROVIDER/MODEL 형식 생성
+                                if (!model.includes('/')) {
+                                    model = `${prefix}/${model}`;
+                                }
+                            }
+                        } else if (!model.includes('/') && modelObj.owned_by === 'local-agent') {
+                            model = modelObj.id;
+                        }
+                    }
+                }
+                
                 const res = await fetch('http://localhost:8000/v1/chat/completions', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: document.getElementById('model-select').value, messages: [{role: 'user', content: text}], session_id: currentSessionId, has_search: document.getElementById('search-check').checked, auto_web_fetch: document.getElementById('auto-fetch-check').checked, compress_context: document.getElementById('compress-check').checked, temperature: parseFloat(document.getElementById('temp-input').value) })
+                    body: JSON.stringify({ model: model, messages: [{role: 'user', content: text}], session_id: currentSessionId, has_search: document.getElementById('search-check').checked, auto_web_fetch: document.getElementById('auto-fetch-check').checked, compress_context: document.getElementById('compress-check').checked, temperature: parseFloat(document.getElementById('temp-input').value) })
                 });
                 const data = await res.json(); loading.remove();
                 if (res.ok) { 
@@ -521,7 +549,15 @@
                     const provider = (data.usage.gateway_provider || 'unknown').toUpperCase();
                     
                     // 제공자 및 모델 상세 경로 표시
-                    const displayPath = modelPath.includes('LOCAL-AGENT') ? modelPath : `${provider}/${modelPath}`;
+                    let displayPath = '';
+                    if (modelPath.includes('LOCAL-AGENT')) {
+                        displayPath = modelPath;
+                    } else if (modelPath.includes('/')) {
+                        // 모델명에 이미 프로바이더가 포함된 경우 (예: OLLAMA/qwen)
+                        displayPath = `LOCAL-AGENT/${modelPath.toUpperCase()}`;
+                    } else {
+                        displayPath = `${provider}/${modelPath}`;
+                    }
                     const reason = data.usage.routing_reason ? `<span style="margin-left:8px; color:#aaa;">(${data.usage.routing_reason})</span>` : '';
                     
                     meta.innerHTML = `<div><span style="color:#888;">via</span> <span style="font-family:monospace; font-weight:bold;">${displayPath}</span>${reason}</div> <span class="badge badge-info" style="font-size:0.6rem; opacity:0.8;">Key #${data.usage.gateway_key_index || 0}</span>`;

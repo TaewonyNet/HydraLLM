@@ -61,6 +61,9 @@ class OpenAICompatAdapter(ILLMProvider):
             elif isinstance(msg_content, dict):
                 msg_content = msg_content.get("text", str(msg_content))
 
+            if not str(msg_content).strip():
+                continue
+
             msg_dict = {"role": msg.role, "content": str(msg_content)}
             if msg.name:
                 msg_dict["name"] = msg.name
@@ -113,17 +116,19 @@ class OpenAICompatAdapter(ILLMProvider):
                 logger.info(f"Enabling Web Search tool for model {model}")
 
             # Make the API call
-            response = await self.client.chat.completions.create(
-                model=model,
-                messages=messages,  # type: ignore
-                tools=tools,  # type: ignore
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-                top_p=request.top_p,
-                frequency_penalty=request.frequency_penalty,
-                presence_penalty=request.presence_penalty,
-                stop=request.stop,
-            )
+            async with httpx.AsyncClient(timeout=60) as http_client:
+                self.client.http_client = http_client
+                response = await self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,  # type: ignore
+                    tools=tools,  # type: ignore
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens,
+                    top_p=request.top_p,
+                    frequency_penalty=request.frequency_penalty,
+                    presence_penalty=request.presence_penalty,
+                    stop=request.stop,
+                )
             logger.info(f"Request succeeded with model {model}")
             # Convert to our standardized response format
             return self._convert_to_chat_response(response)

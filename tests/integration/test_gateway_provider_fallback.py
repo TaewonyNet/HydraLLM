@@ -34,6 +34,7 @@ async def test_gateway_provider_fallback_with_model_resolution():
     mock_gemini_response = MagicMock()
     mock_gemini_response.choices = [MagicMock()]
     mock_gemini_response.choices[0].message.content = "Gemini Fallback Success"
+
     mock_gemini_response.usage = {
         "prompt_tokens": 1,
         "completion_tokens": 1,

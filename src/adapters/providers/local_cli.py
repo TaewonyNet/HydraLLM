@@ -45,21 +45,25 @@ class LocalCLIAdapter(ILLMProvider):
 
         try:
             model_flag = []
-            if request.model:
-                if self.agent_type == "opencode":
-                    model_to_use = request.model
-                    if "/" in model_to_use and model_to_use.startswith(
-                        self.agent_type.upper()
-                    ):
-                        model_to_use = model_to_use.split("/", 1)[1]
+            if self.agent_type == "opencode":
+                model_to_use = request.model
+                if model_to_use:
+                    if "/" in model_to_use:
+                        parts = model_to_use.split("/")
+                        
+                        if len(parts) >= 3 and parts[0].upper() == "LOCAL-AGENT" and parts[1].upper() == "OPENCODE":
+                            model_to_use = "/".join(parts[2:])
+                        elif len(parts) >= 2 and parts[0].upper() == "OPENCODE":
+                            model_to_use = "/".join(parts[1:])
+                        elif len(parts) >= 2 and parts[0].upper() == "LOCAL-AGENT":
+                            model_to_use = "/".join(parts[1:])
+                        else:
+                            model_to_use = request.model
 
-                    if model_to_use == "opencode":
+                    if model_to_use == "opencode" or not model_to_use:
                         model_to_use = "github-copilot/gpt-4o"
                     model_flag = ["-m", model_to_use]
-                elif self.agent_type == "openclaw":
-                    model_flag = ["--agent", request.model]
-
-            if self.agent_type == "opencode":
+                
                 cmd = (
                     [self.binary_path, "run"]
                     + model_flag
@@ -68,16 +72,39 @@ class LocalCLIAdapter(ILLMProvider):
                 if request.session_id:
                     cmd.extend(["--session", request.session_id])
             elif self.agent_type == "openclaw":
+                model_to_use = request.model
+                if model_to_use:
+                    if "/" in model_to_use:
+                        parts = model_to_use.split("/")
+                        
+                        if len(parts) >= 3 and parts[0].upper() == "LOCAL-AGENT" and parts[1].upper() == "OPENCLAW":
+                            model_to_use = "/".join(parts[2:])
+                        elif len(parts) >= 2 and parts[0].upper() == "OPENCLAW":
+                            model_to_use = "/".join(parts[1:])
+                        elif len(parts) >= 2 and parts[0].upper() == "LOCAL-AGENT":
+                            model_to_use = "/".join(parts[1:])
+                        else:
+                            model_to_use = request.model
+                    
+                    if model_to_use == "openclaw" or not model_to_use:
+                        model_to_use = "main"
+                    model_flag = ["--agent", model_to_use]
+
                 cmd = [
                     self.binary_path,
                     "agent",
                     "--message",
                     prompt,
                     "--json",
-                ] + model_flag
+                ]
+                
+                if model_flag:
+                    cmd.extend(model_flag)
+
                 if request.session_id:
                     cmd.extend(["--session-id", request.session_id])
-                if "--agent" not in " ".join(cmd):
+                
+                if "--agent" not in cmd and not request.session_id:
                     cmd.extend(["--agent", "main"])
             else:
                 error_msg = f"Unsupported local agent: {self.agent_type}"
@@ -111,70 +138,65 @@ class LocalCLIAdapter(ILLMProvider):
             raise ServiceUnavailableError(error_msg) from e
 
     def _parse_cli_output(self, output: str, model_name: str) -> ChatResponse:
-        try:
-            lines = output.splitlines()
-            full_content = ""
-            found_json = False
+        lines = output.splitlines()
+        full_content = ""
+        found_json = False
 
-            if self.agent_type == "opencode":
-                for line in lines:
-                    try:
-                        data = json.loads(line)
-                        found_json = True
-                        if data.get("type") == "text":
-                            full_content += data.get("part", {}).get("text", "")
-                        elif data.get("type") == "error":
-                            error_data = data.get("error", {}).get("data", {})
-                            error_msg = error_data.get("message", "Unknown error")
-                            raise ValueError(error_msg)
-                    except json.JSONDecodeError:
-                        continue
+        if self.agent_type == "opencode":
+            for line in lines:
+                try:
+                    data = json.loads(line)
+                    found_json = True
+                    if data.get("type") == "text":
+                        full_content += data.get("part", {}).get("text", "")
+                    elif data.get("type") == "error":
+                        error_data = data.get("error", {}).get("data", {})
+                        error_msg = error_data.get("message") or data.get("error", {}).get("message") or "Unknown error"
+                        raise ValueError(error_msg)
+                except json.JSONDecodeError:
+                    continue
 
-            elif self.agent_type == "openclaw":
-                for line in reversed(lines):
-                    try:
-                        data = json.loads(line)
-                        found_json = True
-                        content = data.get("response", {}).get("text")
-                        if content:
-                            full_content = content
-                            break
-                    except json.JSONDecodeError:
-                        continue
+        elif self.agent_type == "openclaw":
+            for line in reversed(lines):
+                try:
+                    data = json.loads(line)
+                    found_json = True
+                    content = data.get("response", {}).get("text")
+                    if content:
+                        full_content = content
+                        break
+                except json.JSONDecodeError:
+                    continue
 
-            if not found_json or not full_content:
-                return self._raw_output_to_response(output, model_name)
-
-            choices = [
-                ChatMessageChoice(
-                    index=0,
-                    message=ChatMessage(
-                        role="assistant",
-                        content=full_content,
-                        name=None,
-                    ),
-                    finish_reason="stop",
-                    content_filter_results=None,
-                )
-            ]
-
-            return ChatResponse(
-                id=f"cli-{int(time.time())}",
-                object="chat.completion",
-                created=int(time.time()),
-                model=model_name,
-                choices=choices,
-                usage={
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0,
-                },
-                session_id=None,
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to parse CLI output: {e}")
+        if not found_json or not full_content:
             return self._raw_output_to_response(output, model_name)
+
+        choices = [
+            ChatMessageChoice(
+                index=0,
+                message=ChatMessage(
+                    role="assistant",
+                    content=full_content,
+                    name=None,
+                ),
+                finish_reason="stop",
+                content_filter_results=None,
+            )
+        ]
+
+        return ChatResponse(
+            id=f"cli-{int(time.time())}",
+            object="chat.completion",
+            created=int(time.time()),
+            model=model_name,
+            choices=choices,
+            usage={
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+            session_id=None,
+        )
 
     def _raw_output_to_response(self, output: str, model_name: str) -> ChatResponse:
         choices = [
@@ -201,21 +223,7 @@ class LocalCLIAdapter(ILLMProvider):
         )
 
     async def discover_models(self) -> list[dict[str, Any]]:
-        models = [
-            {
-                "id": self.agent_type,
-                "display_name": f"LOCAL-AGENT/{self.agent_type}",
-                "owned_by": "local-agent",
-                "tier": "free",
-                "description": f"Main entry for {self.agent_type}",
-                "capabilities": {
-                    "max_tokens": 32768,
-                    "multimodal": False,
-                    "has_search": True,
-                },
-            }
-        ]
-
+        models = []
         try:
             if self.agent_type == "opencode":
                 process = await asyncio.create_subprocess_exec(
@@ -251,7 +259,7 @@ class LocalCLIAdapter(ILLMProvider):
             elif self.agent_type == "openclaw":
                 process = await asyncio.create_subprocess_exec(
                     self.binary_path,
-                    "models",
+                    "agents",
                     "list",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -259,16 +267,25 @@ class LocalCLIAdapter(ILLMProvider):
                 stdout, _ = await process.communicate()
                 if process.returncode == 0:
                     lines = stdout.decode().splitlines()
-                    for line in lines[1:]:
-                        parts = line.split()
-                        if parts:
-                            model_id = parts[0]
+                    start_parsing = False
+                    for line in lines:
+                        line = line.strip()
+                        if line == "Agents:":
+                            start_parsing = True
+                            continue
+                        if not start_parsing:
+                            continue
+                        
+                        if line.startswith("- "):
+                            agent_id = line[2:].split()[0]
+                            display_name = f"LOCAL-AGENT/OPENCLAW/{agent_id}"
+                            
                             models.append(
                                 {
-                                    "id": model_id,
-                                    "display_name": f"{self.agent_type.upper()}/{model_id}",
+                                    "id": display_name,
+                                    "display_name": display_name,
                                     "owned_by": "local-agent",
-                                    "description": f"Model via {self.agent_type}",
+                                    "description": f"Agent via {self.agent_type}",
                                     "tier": "standard",
                                     "capabilities": {
                                         "max_tokens": 32768,
@@ -277,6 +294,16 @@ class LocalCLIAdapter(ILLMProvider):
                                     },
                                 }
                             )
+            
+            if not models:
+                models.append({
+                    "id": "main" if self.agent_type == "openclaw" else "default",
+                    "display_name": f"LOCAL-AGENT/{self.agent_type.upper()}/default",
+                    "owned_by": "local-agent",
+                    "tier": "free",
+                    "description": f"Default entry for {self.agent_type}",
+                    "capabilities": {"max_tokens": 32768, "multimodal": False, "has_search": True},
+                })
         except Exception as e:
             logger.warning(f"Failed to discover sub-models for {self.agent_type}: {e}")
 
