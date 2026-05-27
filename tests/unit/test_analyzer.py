@@ -13,6 +13,8 @@ from src.domain.enums import ProviderType
 from src.domain.models import ChatMessage, ChatRequest
 from src.services.analyzer import ContextAnalyzer
 
+pytestmark = pytest.mark.unit
+
 
 class TestContextAnalyzer:
     def setup_method(self):

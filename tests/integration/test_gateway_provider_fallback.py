@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.core.config import settings
 from src.core.exceptions import RateLimitError
 from src.domain.enums import ProviderType
 from src.domain.models import ChatMessage, ChatRequest
@@ -33,6 +34,7 @@ async def test_gateway_provider_fallback_with_model_resolution():
     mock_gemini_response = MagicMock()
     mock_gemini_response.choices = [MagicMock()]
     mock_gemini_response.choices[0].message.content = "Gemini Fallback Success"
+
     mock_gemini_response.usage = {
         "prompt_tokens": 1,
         "completion_tokens": 1,
@@ -58,5 +60,6 @@ async def test_gateway_provider_fallback_with_model_resolution():
     assert response.choices[0].message.content == "Gemini Fallback Success"
 
     args, kwargs = mock_gemini_adapter.generate.call_args
-    assert args[0].model == "gemini-2.5-flash"
+    # fallback 시 analyzer.get_default_model_for_provider(GEMINI) = settings.default_free_model 전달.
+    assert args[0].model == settings.default_free_model
     assert args[0].model != "llama-3.3-70b-versatile"

@@ -5,6 +5,8 @@ import pytest
 from src.adapters.providers.gemini import GeminiAdapter
 from src.domain.models import ChatMessage, ChatRequest
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.asyncio
 async def test_gemini_adapter_tools_selection():

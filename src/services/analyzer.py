@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, cast
+from typing import Any
 
 from src.core.config import settings
 from src.domain.enums import AgentType, ModelType, ProviderType, RoutingReason
@@ -70,26 +70,61 @@ class ContextAnalyzer(IContextAnalyzer):
         model_hint = request.model.lower() if request.model else "auto"
         preferred_provider = None
 
+        if model_hint.startswith("local-agent/"):
+            pure_path = model_hint.replace("local-agent/", "", 1)
+            if "/" in pure_path:
+                agent_part, model_part = pure_path.split("/", 1)
+                try:
+                    return RoutingDecision(
+                        provider=None,
+                        agent=AgentType(agent_part),
+                        model_name=model_part,
+                        reason=RoutingReason.MODEL_HINT.value,
+                        confidence=1.0,
+                        web_search_required=False,
+                    )
+                except ValueError:
+                    pass
+
+        requested_model = None
         if "/" in model_hint:
-            parts = model_hint.split("/")
+            parts = model_hint.split("/", 1)
             p_name = parts[0]
+            
             if p_name in [p.value for p in ProviderType]:
                 preferred_provider = ProviderType(p_name)
-                model_hint = parts[1]
+                requested_model = parts[1]
+                
             elif p_name in [a.value for a in AgentType]:
                 return RoutingDecision(
+                    provider=None,
                     agent=AgentType(p_name),
                     model_name=parts[1],
                     reason=RoutingReason.MODEL_HINT.value,
                     confidence=1.0,
+                    web_search_required=False,
                 )
+        else:
+            requested_model = self._parse_model_hint(model_hint)
 
         web_required = self.detect_web_intent(request)
         estimated_tokens = request.estimate_token_count()
         has_images = request.has_images()
 
+        if requested_model and model_hint not in ["auto", "default", "mllm/auto"]:
+            target = self._get_target_for_model(requested_model)
+            result_decision = RoutingDecision(
+                model_name=requested_model,
+                reason=RoutingReason.MODEL_HINT.value,
+                confidence=1.0,
+                web_search_required=web_required
+            )
+            if isinstance(target, ProviderType):
+                result_decision.provider = target
+            else:
+                result_decision.agent = target
+            return result_decision
         if model_hint in ["mllm/auto", "auto", "default"]:
-            model_hint = "auto"
             if estimated_tokens > 7000:
                 preferred_provider = ProviderType.GEMINI
             elif not preferred_provider and available_tiers:
@@ -104,28 +139,10 @@ class ContextAnalyzer(IContextAnalyzer):
                 ):
                     preferred_provider = ProviderType.CEREBRAS
 
-        if model_hint == "opencode":
-            model_list = self.get_supported_models_info()
-            working_model = next(
-                (m["id"] for m in model_list if "github-copilot" in m["id"]),
-                next(
-                    (
-                        m["id"]
-                        for m in model_list
-                        if "/" in m["id"] and "opencode/" not in m["id"]
-                    ),
-                    None,
-                ),
-            )
-            if working_model:
-                model_hint = working_model
-
-        requested_model = self._parse_model_hint(model_hint)
-
         routing_strategy = self._determine_strategy(
             estimated_tokens,
             has_images,
-            requested_model,
+            requested_model if model_hint not in ["auto", "default"] else None,
             available_tiers,
             preferred_provider,
             web_required=web_required,
@@ -380,6 +397,16 @@ class ContextAnalyzer(IContextAnalyzer):
         # 1. Resolve to string
         model_id = model.value if hasattr(model, "value") else str(model)
 
+        work_id = model_id.lower()
+        if work_id.startswith("local-agent/"):
+            work_id = work_id.replace("local-agent/", "", 1)
+        
+        if "/" in work_id:
+            prefix = work_id.split("/")[0]
+            if prefix == "ollama": return AgentType.OLLAMA
+            if prefix == "opencode": return AgentType.OPENCODE
+            if prefix == "openclaw": return AgentType.OPENCLAW
+
         # 2. Check dynamically registered models (from discover_models)
         if hasattr(self, "_dynamic_targets"):
             clean_id = model_id.replace("models/", "")
@@ -391,7 +418,7 @@ class ContextAnalyzer(IContextAnalyzer):
         # 3. Explicit provider/agent prefix handling (e.g. 'gemini/custom-model')
         if "/" in model_id:
             prefix = model_id.split("/")[0].lower()
-            prefix_map = {
+            prefix_map: dict[str, ProviderType | AgentType] = {
                 "gemini": ProviderType.GEMINI,
                 "groq": ProviderType.GROQ,
                 "cerebras": ProviderType.CEREBRAS,
@@ -434,10 +461,15 @@ class ContextAnalyzer(IContextAnalyzer):
         if not request_model or request_model.lower() == "auto":
             return self._default_free_model
 
-        if "/" in request_model:
-            parts = request_model.split("/")
-            if len(parts) > 1:
-                return parts[1]
+        model_hint = request_model.lower()
+        if model_hint.startswith("local-agent/"):
+            model_hint = model_hint.replace("local-agent/", "", 1)
+            if "/" in model_hint:
+                return model_hint.split("/", 1)[1]
+
+        if "/" in model_hint:
+            parts = model_hint.split("/", 1)
+            return parts[1]
 
         return request_model
 
@@ -504,6 +536,19 @@ class ContextAnalyzer(IContextAnalyzer):
                     "cost_per_token": 0.0,
                 },
             },
+            {
+                "id": "LOCAL-AGENT/OLLAMA/auto",
+                "display_name": "LOCAL-AGENT/OLLAMA/auto",
+                "owned_by": "local-agent",
+                "tier": "free",
+                "description": "Auto routing for Ollama",
+                "capabilities": {
+                    "max_tokens": 32768,
+                    "multimodal": False,
+                    "has_search": True,
+                    "cost_per_token": 0.0,
+                },
+            },
         ]
 
     def _build_model_info(
@@ -516,10 +561,14 @@ class ContextAnalyzer(IContextAnalyzer):
             max_tokens = self._provider_limits.get(target, 0)
             owned_by = target.value if hasattr(target, "value") else str(target)
             cost = self._token_costs.get(target)
+            display_id = model_name
+            display_name = f"{owned_by.upper()}/{model_name}"
         else:
             max_tokens = self._agent_limits.get(target, 0)
             owned_by = "local-agent"
             cost = None
+            display_id = f"LOCAL-AGENT/{target.value.upper()}/{model_name}"
+            display_name = display_id
 
         is_multimodal = False
         if isinstance(target, ProviderType) and target == ProviderType.GEMINI:
@@ -547,8 +596,8 @@ class ContextAnalyzer(IContextAnalyzer):
             tier = "free"
 
         return {
-            "id": model_name,
-            "display_name": f"{owned_by.upper()}/{model_name}",
+            "id": display_id,
+            "display_name": display_name,
             "owned_by": owned_by,
             "tier": tier,
             "description": meta.get("description"),
@@ -586,13 +635,21 @@ class ContextAnalyzer(IContextAnalyzer):
         provider: ProviderType | AgentType,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        self._model_mapping[model_name] = model_name
+        full_id = model_name
+        if isinstance(provider, AgentType):
+            full_id = f"LOCAL-AGENT/{provider.value.upper()}/{model_name}"
+            self._model_mapping[full_id] = model_name
+            self._model_mapping[model_name] = model_name
+        else:
+            self._model_mapping[model_name] = model_name
 
         if not hasattr(self, "_dynamic_targets"):
             self._dynamic_targets: dict[str, ProviderType | AgentType] = {}
+        self._dynamic_targets[full_id] = provider
         self._dynamic_targets[model_name] = provider
 
         if not hasattr(self, "_model_metadata"):
             self._model_metadata: dict[str, dict[str, Any]] = {}
         if metadata:
+            self._model_metadata[full_id] = metadata
             self._model_metadata[model_name] = metadata

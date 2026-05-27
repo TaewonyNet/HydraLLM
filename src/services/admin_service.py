@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 class AdminService:
     def __init__(self, session_manager: ISessionManager):
         self.session_manager = session_manager
+        # 온보딩에서 가용 모델 조회 용도로 app.py 가 주입. DI 순환 회피를 위해 속성 주입 사용.
+        self._gateway: Any | None = None
 
     async def get_sessions(self) -> list[dict[str, Any]]:
         try:

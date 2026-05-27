@@ -162,7 +162,7 @@ def create_app() -> FastAPI:
     )
 
     # AdminService 가 온보딩에서 가용 모델 목록을 조회할 수 있도록 gateway 핸들 연결.
-    admin_service._gateway = gateway  # noqa: SLF001
+    admin_service._gateway = gateway
 
     app.state.analyzer = analyzer
     app.state.key_manager = key_manager

@@ -1,6 +1,8 @@
 import asyncio
 import logging
 
+import pytest
+
 from src.domain.models import ChatMessage, ChatRequest
 from src.services.gateway import Gateway
 
@@ -8,6 +10,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AutoModelTest")
 
 
+@pytest.mark.asyncio
 async def test_auto_models_functionality():
     gateway = Gateway()
 

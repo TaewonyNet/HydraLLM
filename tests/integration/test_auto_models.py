@@ -3,6 +3,8 @@ import logging
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.domain.models import ChatMessage, ChatRequest
@@ -12,6 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AutoModelTest")
 
 
+@pytest.mark.asyncio
 async def test_auto_variants():
     gateway = Gateway()
 
