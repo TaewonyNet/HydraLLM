@@ -14,6 +14,7 @@ class InstallerService:
     OPENCLAW_NPM_PACKAGE = "openclaw"
     OPENCODE_INSTALL_URL = "https://opencode.ai/install"
     OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
+    OPENCLAW_MLLM_AUTO_WORKSPACE = Path.home() / ".openclaw" / "workspace-mllm-auto"
     HYDRA_PROVIDER_BASE_URL = "http://127.0.0.1:8000/v1"
 
     async def check_installed(self, tool: str) -> dict[str, Any]:
@@ -56,7 +57,7 @@ class InstallerService:
                 + (" (provider config updated)" if provider_changed else ""),
             }
 
-        workspace_dir = "/home/tide/.openclaw/workspace-mllm-auto"
+        workspace_dir = str(self.OPENCLAW_MLLM_AUTO_WORKSPACE)
         cmd = [
             "openclaw", "agents", "add", "mllm-auto",
             "--non-interactive",
