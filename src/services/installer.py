@@ -14,6 +14,7 @@ class InstallerService:
     OPENCLAW_NPM_PACKAGE = "openclaw"
     OPENCODE_INSTALL_URL = "https://opencode.ai/install"
     OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
+    OPENCLAW_MLLM_AUTO_WORKSPACE = Path.home() / ".openclaw" / "workspace-mllm-auto"
     HYDRA_PROVIDER_BASE_URL = "http://127.0.0.1:8000/v1"
 
     async def check_installed(self, tool: str) -> dict[str, Any]:
@@ -56,7 +57,7 @@ class InstallerService:
                 + (" (provider config updated)" if provider_changed else ""),
             }
 
-        workspace_dir = "/home/tide/.openclaw/workspace-mllm-auto"
+        workspace_dir = str(self.OPENCLAW_MLLM_AUTO_WORKSPACE)
         cmd = [
             "openclaw", "agents", "add", "mllm-auto",
             "--non-interactive",
@@ -91,7 +92,7 @@ class InstallerService:
         if not config_path.exists():
             return False
         try:
-            data = json.loads(config_path.read_text())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning(f"openclaw.json read failed: {exc}")
             return False
@@ -120,7 +121,7 @@ class InstallerService:
         providers["openai"] = desired_provider
 
         try:
-            config_path.write_text(json.dumps(data, indent=2))
+            config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning(f"openclaw.json write failed: {exc}")
             return False

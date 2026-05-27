@@ -38,3 +38,5 @@ gateway.log
 gateway_sessions.sqlite
 startup_error_debug.log
 test_out.log
+/.archive/
+/CLAUDE.md
