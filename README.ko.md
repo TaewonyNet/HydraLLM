@@ -21,10 +21,13 @@
 │   ├── api/v1/                   # endpoints.py, dependencies.py
 │   ├── core/                     # config, container, exceptions, logging
 │   ├── domain/                   # enums, interfaces, schemas, models
-│   ├── services/                 # analyzer, gateway, key_manager, session_manager,
-│   │                             # scraper, compressor, web_context_service,
-│   │                             # admin_service, metrics_service, observability,
-│   │                             # session_orchestrator, context_manager
+│   ├── services/                 # gateway(얇은 오케스트레이터) + 협업자:
+│   │                             # resilience_manager, agent_executor, web_coordinator,
+│   │                             # session_orchestrator, memory_optimizer, analyzer,
+│   │                             # key_manager, circuit_breaker, scraper, web_context_service,
+│   │                             # intent_classifier, keyword_store, compressor,
+│   │                             # session_manager, context_manager, admin_service,
+│   │                             # installer, comm_logger, metrics_service, observability
 │   └── utils/                    # ulid 헬퍼
 ├── tests/
 │   ├── unit/                     # analyzer, key_manager, adapters, ulid, stability
@@ -38,11 +41,11 @@
 
 ## 핵심 기능
 
-1. **지능형 라우팅** — `services/analyzer.py::ContextAnalyzer`가 토큰 수, 멀티모달 여부, 탐지된 웹 의도, 명시적 모델 힌트(`provider/model`), 사용 가능한 키 티어를 기반으로 공급자와 모델을 선택합니다.
+1. **지능형 라우팅** — `services/analyzer.py::ContextAnalyzer`가 토큰 수, 멀티모달 여부, 명시적 모델 힌트(`provider/model`), 사용 가능한 키 티어를 기반으로 공급자와 모델을 선택합니다. 부하 분산을 위해 fast tier(Groq↔Cerebras)는 **라운드로빈**으로 선택하며, **웹 의도는 더 이상 Gemini를 강제하지 않습니다**(웹 컨텍스트는 프롬프트에 주입되므로 fast tier도 처리 → Gemini 쏠림 완화). 멀티모달(이미지)과 대용량(토큰 임계값 이상)만 Gemini로 라우팅됩니다.
 2. **회로 차단기와 클라우드 페일오버** — `services/gateway.py`가 모든 공급자 호출을 `CircuitBreaker`(실패 5회 임계값, 60초 복구)로 감싸며, `PROVIDER_PRIORITY` 체인(Gemini → Groq → Cerebras)을 따라 재시도합니다.
 3. **최종 로컬 폴백** — 모든 클라우드 공급자가 소진되면 Gateway가 `OpenAICompatAdapter`로 `OLLAMA_BASE_URL`의 Ollama에 라우팅합니다.
 4. **쿨다운 기반 키 로테이션** — `services/key_manager.py::KeyManager`가 공급자별 풀을 유지하며, 활성 키 집합에서 랜덤하게 선택하고, 쿼터(1시간) 또는 거부/403(24시간) 오류에 대해 더 긴 쿨다운을 적용합니다.
-5. **웹 보강** — `services/web_context_service.py`와 `services/scraper.py::WebScraper`(Playwright + Scrapling)가 명시적 URL을 가져오거나 웹 의도 감지 시 스크래핑을 수행하며, 24시간 SQLite 캐시를 사용합니다. 게이트웨이가 웹 컨텍스트 블록을 `request.messages[-2]` 위치에 주입하면 stdout 에 `Web context injected: N chars (session=...)` INFO 로그를 함께 남겨, SQLite 이벤트 스토어를 열어보지 않고도 보강 적용 여부를 즉시 확인할 수 있습니다.
+5. **웹 보강** — `services/web_context_service.py`와 `services/scraper.py::WebScraper`(Playwright + Scrapling)가 명시적 URL을 가져오거나 웹 의도 감지 시 스크래핑을 수행하며, SQLite 캐시를 사용합니다. 본문은 `trafilatura` 설치 시 깨끗한 **markdown** 으로 추출(없으면 BeautifulSoup 폴백)해 토큰 효율을 높이고, 결합 컨텍스트는 6000자로 제한해 fast tier 윈도우에 맞춥니다. 게이트웨이가 웹 컨텍스트 블록을 `request.messages[-2]` 위치에 주입하면 stdout 에 `Web context injected: N chars into request.messages[-2] (session=...)` INFO 로그를 남깁니다. 스크랩 실패/SSRF 차단은 `None` 으로 처리되어 오류 문구가 컨텍스트로 주입되지 않습니다.
 6. **컨텍스트 압축** — `services/compressor.py::ContextCompressor`가 LLMLingua-2(선택적 `compression` extra)를 사용해 긴 히스토리를 축소합니다.
 7. **세션 영속화** — `services/session_manager.py::SessionManager`가 SQLite(WAL)에 메시지와 파트를 저장하고, 포킹 및 compaction 임계값을 지원하며, 런타임 설정을 보관합니다.
 8. **통합 관리 UI** — `/ui`에서 playground, dashboard, 키 상태, 모델 카탈로그를 하나의 SPA로 제공하며, 모든 fetch 호출은 프록시 안정성을 위해 절대 URL을 사용합니다.

@@ -5,7 +5,7 @@ import time
 from datetime import timedelta
 from typing import Any
 
-from src.core.exceptions import ResourceExhaustedError
+from src.core.exceptions import ErrorCategory, ResourceExhaustedError
 from src.domain.enums import ProviderType, TierType
 from src.domain.interfaces import IKeyManager
 
@@ -69,53 +69,69 @@ class KeyManager(IKeyManager):
             provider: The provider type
             api_key: The API key that succeeded
         """
-        # Move key back to active pool if it was in failed pool
-        if api_key in self._failed_keys.get(provider, []):
-            self._failed_keys[provider].remove(api_key)
-            if provider not in self._active_keys:
-                self._active_keys[provider] = []
-            self._active_keys[provider].append(api_key)
-            self._logger.info(
-                f"Key {api_key[:8]}... recovered for provider {provider.value}"
-            )
+        # 활성/실패 풀 변경은 get_next_key 와 동일한 락으로 보호한다(원자성).
+        async with self._lock:
+            # Move key back to active pool if it was in failed pool
+            if api_key in self._failed_keys.get(provider, []):
+                self._failed_keys[provider].remove(api_key)
+                if provider not in self._active_keys:
+                    self._active_keys[provider] = []
+                self._active_keys[provider].append(api_key)
+                self._logger.info(
+                    f"Key {api_key[:8]}... recovered for provider {provider.value}"
+                )
 
     async def report_failure(
         self, provider: ProviderType, api_key: str, error: Exception
     ) -> None:
+        # 어댑터가 정규화한 예외 카테고리를 우선 신뢰하고, 비정형 예외는 메시지
+        # 휴리스틱으로 보강한다(타입이 누락돼도 안전하게 동작).
+        category = getattr(error, "category", None)
         error_msg = str(error).lower()
-        is_quota_error = "quota" in error_msg or "billing" in error_msg
-        is_forbidden = "403" in error_msg or "denied" in error_msg
+        is_forbidden = (
+            category == ErrorCategory.AUTH_FAILURE
+            or "403" in error_msg
+            or "denied" in error_msg
+            or "forbidden" in error_msg
+        )
+        is_quota_error = not is_forbidden and (
+            category == ErrorCategory.RESOURCE_EXHAUSTED
+            or "quota" in error_msg
+            or "billing" in error_msg
+        )
 
-        if api_key in self._active_keys.get(provider, []):
-            self._active_keys[provider].remove(api_key)
-            if provider not in self._failed_keys:
-                self._failed_keys[provider] = []
-            self._failed_keys[provider].append(api_key)
+        # 활성/실패 풀 변경은 get_next_key 와 동일한 락으로 보호한다(원자성).
+        async with self._lock:
+            if api_key in self._active_keys.get(provider, []):
+                self._active_keys[provider].remove(api_key)
+                if provider not in self._failed_keys:
+                    self._failed_keys[provider] = []
+                self._failed_keys[provider].append(api_key)
 
-            if is_forbidden:
-                cooldown_seconds = 86400
-            elif is_quota_error:
-                cooldown_seconds = 3600
-            else:
-                cooldown_seconds = int(self.cooldown_period.total_seconds())
+                if is_forbidden:
+                    cooldown_seconds = 86400
+                elif is_quota_error:
+                    cooldown_seconds = 3600
+                else:
+                    cooldown_seconds = int(self.cooldown_period.total_seconds())
 
-            self.update_key_metadata(
-                provider,
-                api_key,
-                {
-                    "failed_at": time.time(),
-                    "error": error_msg,
-                    "is_quota_limit": is_quota_error,
-                    "is_forbidden": is_forbidden,
-                    "cooldown_until": time.time() + cooldown_seconds,
-                },
-            )
+                self.update_key_metadata(
+                    provider,
+                    api_key,
+                    {
+                        "failed_at": time.time(),
+                        "error": error_msg,
+                        "is_quota_limit": is_quota_error,
+                        "is_forbidden": is_forbidden,
+                        "cooldown_until": time.time() + cooldown_seconds,
+                    },
+                )
 
-            log_level = logging.ERROR if is_forbidden else logging.WARNING
-            self._logger.log(
-                log_level,
-                f"Key {api_key[:8]}... failed for provider {provider.value} (Forbidden: {is_forbidden}): {error_msg[:100]}",
-            )
+                log_level = logging.ERROR if is_forbidden else logging.WARNING
+                self._logger.log(
+                    log_level,
+                    f"Key {api_key[:8]}... failed for provider {provider.value} (Forbidden: {is_forbidden}): {error_msg[:100]}",
+                )
 
     def get_key_status(self) -> dict[ProviderType, dict[str, Any]]:
         """Get current key status for all providers."""
@@ -232,39 +248,3 @@ class KeyManager(IKeyManager):
         except ValueError:
             return -1
 
-    async def get_all_supported_models(self) -> list[dict[str, Any]]:
-        all_models = []
-        for provider, keys in self._active_keys.items():
-            if keys:
-                if provider == ProviderType.GEMINI:
-                    all_models.append(
-                        {
-                            "id": "gemini-1.5-flash",
-                            "display_name": "Gemini 1.5 Flash",
-                            "owned_by": "google",
-                            "tier": "free",
-                            "capabilities": {
-                                "max_tokens": 1000000,
-                                "multimodal": True,
-                                "has_search": True,
-                            },
-                        }
-                    )
-                elif provider == ProviderType.GROQ:
-                    all_models.append(
-                        {
-                            "id": "llama-3.3-70b-versatile",
-                            "display_name": "Llama 3.3 70B",
-                            "owned_by": "groq",
-                            "tier": "standard",
-                            "capabilities": {
-                                "max_tokens": 8192,
-                                "multimodal": False,
-                                "has_search": False,
-                            },
-                        }
-                    )
-        return all_models
-
-    def get_next_key_sync(self, provider: ProviderType) -> str:
-        return asyncio.run(self.get_next_key(provider))

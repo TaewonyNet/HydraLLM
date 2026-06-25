@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -104,10 +105,12 @@ async def chat_completion(
     except HTTPException:
         raise
     except Exception as e:
+        # 예상치 못한 예외의 원문(str(e))은 SDK/내부 엔드포인트 정보를 흘릴 수 있으므로
+        # 클라이언트에는 일반 메시지만 노출하고, 상세는 서버 로그에만 남긴다(SPEC §4/§10).
         logger.error(f"Chat completion error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
+            detail="Internal server error",
         ) from e
 
     if request.stream:
@@ -387,7 +390,7 @@ async def add_intent_keywords(
         raise HTTPException(status_code=400, detail="lang (string) is required")
     if not isinstance(keywords, list) or not all(isinstance(k, str) for k in keywords):
         raise HTTPException(status_code=400, detail="keywords (list[str]) is required")
-    added = keyword_store.add(lang, keywords)
+    added = await asyncio.to_thread(keyword_store.add, lang, keywords)
     return {"status": "success", "lang": lang, "added": added}
 
 

@@ -46,38 +46,51 @@ async def recovery_task(gateway: Gateway) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # 비치명적: 스크래퍼(웹 보강은 선택 기능). 실패해도 나머지 핵심 기동을 계속한다 —
+    # 과거엔 이 실패가 recovery/discovery 태스크 생성까지 건너뛰어 silent degraded 기동을
+    # 유발했다(R6).
     try:
-        scraper = app.state.scraper
-        await scraper.startup()
-
-        gateway = app.state.gateway
-        gateway.initialize_settings()
-
-        intent_classifier = app.state.intent_classifier
-        app.state.intent_init_task = asyncio.create_task(intent_classifier.initialize())
-
-        async def run_discovery() -> None:
-            logger.info("🚀 Starting initial resource discovery and key probing...")
-            try:
-                await gateway.discover_all_models()
-                await gateway.probe_all_keys()
-                logger.info("✅ Background discovery and probing completed")
-            except Exception as de:
-                logger.error(f"❌ Failed to run initial discovery: {de}")
-
-        app.state.discovery_task = asyncio.create_task(run_discovery())
-        app.state.recovery_task = asyncio.create_task(recovery_task(gateway))
+        await app.state.scraper.startup()
     except Exception as e:
-        logger.error(f"Error during startup: {e}")
+        logger.error(f"Scraper startup failed (web enrichment disabled): {e}")
+
+    # 치명적: 게이트웨이 설정·백그라운드 태스크. 여기서 실패하면 swallow 하지 않고
+    # 전파해 기동을 명확히 실패시킨다(silent degraded 방지).
+    gateway = app.state.gateway
+    gateway.initialize_settings()
+
+    intent_classifier = app.state.intent_classifier
+    app.state.intent_init_task = asyncio.create_task(intent_classifier.initialize())
+
+    async def run_discovery() -> None:
+        logger.info("🚀 Starting initial resource discovery and key probing...")
+        try:
+            await gateway.discover_all_models()
+            await gateway.probe_all_keys()
+            logger.info("✅ Background discovery and probing completed")
+        except Exception as de:
+            logger.error(f"❌ Failed to run initial discovery: {de}")
+
+    app.state.discovery_task = asyncio.create_task(run_discovery())
+    app.state.recovery_task = asyncio.create_task(recovery_task(gateway))
 
     yield
 
+    # 백그라운드 태스크를 취소하고 실제로 종료될 때까지 await 한다(cancel-without-await로
+    # 인한 "Task was destroyed"·죽은 리소스 접근 방지, intent_init_task 포함).
+    tasks = [
+        getattr(app.state, name, None)
+        for name in ("discovery_task", "recovery_task", "intent_init_task")
+    ]
+    for t in tasks:
+        if t is not None:
+            t.cancel()
+    pending = [t for t in tasks if t is not None]
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
     if hasattr(app.state, "scraper"):
         await app.state.scraper.shutdown()
-    if hasattr(app.state, "discovery_task"):
-        app.state.discovery_task.cancel()
-    if hasattr(app.state, "recovery_task"):
-        app.state.recovery_task.cancel()
     if hasattr(app.state, "session_manager"):
         app.state.session_manager.close()
 
@@ -158,6 +171,7 @@ def create_app() -> FastAPI:
         session_manager,
         scraper,
         compressor,
+        metrics_service=metrics_service,  # 동일 인스턴스 공유(이중 생성 방지, N3)
         intent_classifier=intent_classifier,
     )
 

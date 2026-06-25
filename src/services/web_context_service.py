@@ -123,11 +123,13 @@ class WebContextService:
                 url, mode=cast(ScrapeMode, settings.default_scrape_mode)
             )
             latency = int((time.time() - start) * 1000)
-            if raw and not any(
-                err in raw for err in ["Failed to fetch", "Error scraping"]
-            ):
-                optimized = self.compressor.compress(
-                    raw, instruction=f"Extract info relevant to: {query}"
+            # scrape_url 은 실패/차단 시 None 을 반환한다(R3). 압축(LLMLingua)은
+            # 이벤트루프를 막지 않도록 스레드에서 실행한다(R4).
+            if raw:
+                optimized = await asyncio.to_thread(
+                    self.compressor.compress,
+                    raw,
+                    instruction=f"Extract info relevant to: {query}",
                 )
                 await self.session_manager.set_web_cache(
                     url, optimized, cast(ScrapeMode, settings.default_scrape_mode)
@@ -195,9 +197,12 @@ class WebContextService:
                 query, mode=cast(ScrapeMode, settings.default_scrape_mode)
             )
             latency = int((time.time() - start) * 1000)
-            no_results = t("web.no_search_results")
-            if res and no_results not in res:
-                optimized = self.compressor.compress(res, instruction=query)
+            # 검색 결과 없음/안전결과 없음 i18n 메시지를 content 로 오인하지 않는다(R3).
+            no_result_msgs = (t("web.no_search_results"), t("web.no_safe_results"))
+            if res and not any(m in res for m in no_result_msgs):
+                optimized = await asyncio.to_thread(
+                    self.compressor.compress, res, instruction=query
+                )
                 await self.session_manager.set_web_cache(
                     cache_key,
                     optimized,

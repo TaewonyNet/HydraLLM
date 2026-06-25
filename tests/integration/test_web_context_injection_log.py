@@ -79,8 +79,10 @@ async def test_web_context_injection_emits_stdout_log_and_mutates_messages(
 
     decision = MagicMock()
     decision.provider = ProviderType.GROQ
+    decision.agent = None
     decision.model_name = "llama-3.3-70b-versatile"
     decision.reason = "web_ctx_test"
+    decision.strict = False
     gateway.analyzer.analyze = AsyncMock(return_value=decision)
 
     # 웹 보강은 8049 chars 의 합성 데이터를 반환하도록 모킹
@@ -96,7 +98,7 @@ async def test_web_context_injection_emits_stdout_log_and_mutates_messages(
     adapter.generate = AsyncMock(
         return_value=_make_response("ok", "llama-3.3-70b-versatile")
     )
-    gateway._get_provider_adapter = MagicMock(return_value=adapter)
+    gateway.resilience._get_provider_adapter = MagicMock(return_value=adapter)
 
     session_id = f"webctx-{uuid4().hex[:8]}"
     request = ChatRequest(
@@ -105,7 +107,7 @@ async def test_web_context_injection_emits_stdout_log_and_mutates_messages(
         messages=[ChatMessage(role="user", content="최신 영화 알려줘")],
     )
 
-    with caplog.at_level(logging.INFO, logger="src.services.gateway"):
+    with caplog.at_level(logging.INFO):  # 모든 로거 캡처(정본 로그는 web_coordinator 발신)
         await gateway.process_request(request)
 
     # 1) 어댑터에 전달된 request.messages 에 web_context 시스템 메시지가 포함됐는가?
@@ -136,13 +138,13 @@ async def test_web_context_injection_emits_stdout_log_and_mutates_messages(
     injection_logs = [
         rec
         for rec in caplog.records
-        if rec.name == "src.services.gateway"
+        if rec.name == "src.services.web_coordinator"
         and rec.levelno == logging.INFO
         and "Web context injected" in rec.getMessage()
     ]
     assert len(injection_logs) == 1, (
         f"INFO 로그 'Web context injected: ...' 1회 기록되어야 함. "
-        f"실제: {[r.getMessage() for r in caplog.records if r.name == 'src.services.gateway']}"
+        f"실제: {[r.getMessage() for r in caplog.records if 'Web context' in r.getMessage()]}"
     )
     message = injection_logs[0].getMessage()
     assert str(len(fake_web_text)) in message
@@ -164,8 +166,10 @@ async def test_no_injection_log_when_enrich_returns_empty(isolated_session_manag
 
     decision = MagicMock()
     decision.provider = ProviderType.GROQ
+    decision.agent = None
     decision.model_name = "llama-3.3-70b-versatile"
     decision.reason = "no_web_ctx"
+    decision.strict = False
     gateway.analyzer.analyze = AsyncMock(return_value=decision)
 
     gateway.web_context.enrich_request = AsyncMock(return_value=([], None))
@@ -174,7 +178,7 @@ async def test_no_injection_log_when_enrich_returns_empty(isolated_session_manag
     adapter.generate = AsyncMock(
         return_value=_make_response("ok", "llama-3.3-70b-versatile")
     )
-    gateway._get_provider_adapter = MagicMock(return_value=adapter)
+    gateway.resilience._get_provider_adapter = MagicMock(return_value=adapter)
 
     request = ChatRequest(
         model="groq/llama-3.3-70b-versatile",
@@ -182,13 +186,13 @@ async def test_no_injection_log_when_enrich_returns_empty(isolated_session_manag
         messages=[ChatMessage(role="user", content="일반 질문입니다")],
     )
 
-    with caplog.at_level(logging.INFO, logger="src.services.gateway"):
+    with caplog.at_level(logging.INFO):
         await gateway.process_request(request)
 
     injection_logs = [
         rec
         for rec in caplog.records
-        if rec.name == "src.services.gateway"
+        if rec.name == "src.services.web_coordinator"
         and "Web context injected" in rec.getMessage()
     ]
     assert injection_logs == [], "web_text 가 없으면 주입 로그도 찍히면 안 됨"

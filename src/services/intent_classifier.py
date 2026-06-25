@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import math
@@ -169,26 +170,28 @@ class IntentClassifier:
             return True
         return False
 
+    async def _embed_one(self, client: httpx.AsyncClient, text: str) -> list[float]:
+        resp = await client.post(
+            f"{self._base_url}/api/embed",
+            json={"model": self._model, "input": text},
+        )
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+        embeddings: list[list[float]] = data.get("embeddings", [])
+        return embeddings[0] if embeddings else []
+
     async def _embed(self, text: str) -> list[float]:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{self._base_url}/api/embed",
-                json={"model": self._model, "input": text},
-            )
-            resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
-            embeddings: list[list[float]] = data.get("embeddings", [])
-            if embeddings:
-                return embeddings[0]
-            return []
+            return await self._embed_one(client, text)
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        results: list[list[float]] = []
-        for text in texts:
-            emb = await self._embed(text)
-            if emb:
-                results.append(emb)
-        return results
+        # 단일 클라이언트 재사용 + 동시 요청(직렬 N회 HTTP·매번 새 클라이언트 제거, R16).
+        async with httpx.AsyncClient(timeout=10) as client:
+            embedded = await asyncio.gather(
+                *(self._embed_one(client, t) for t in texts),
+                return_exceptions=True,
+            )
+        return [e for e in embedded if isinstance(e, list) and e]
 
     @property
     def is_ready(self) -> bool:
@@ -212,7 +215,8 @@ class IntentClassifier:
             keywords = self._fallback_keywords(query, lang)
         if not keywords:
             return []
-        added = self._keyword_store.add(lang, keywords)
+        # keyword_store.add 는 블로킹 파일 IO(_flush)를 동반하므로 스레드에서 실행(R10).
+        added = await asyncio.to_thread(self._keyword_store.add, lang, keywords)
         if added:
             logger.info(f"Learned web keywords ({lang}): {added}")
         return added

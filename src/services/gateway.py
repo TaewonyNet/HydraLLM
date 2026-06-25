@@ -12,17 +12,14 @@ from src.adapters.providers.openai_compat import OpenAICompatAdapter
 from src.core.config import settings
 from src.core.exceptions import (
     BaseAppError,
-    RateLimitError,
-    ResourceExhaustedError,
-    ServiceUnavailableError,
 )
 from src.core.logging import request_id_ctx
 from src.domain.enums import AgentType, ModelType, ProviderType
 from src.domain.interfaces import ILLMProvider, IRouter, ISessionManager
-from src.domain.models import ChatMessage, ChatRequest, ChatResponse, RoutingDecision
+from src.domain.models import ChatMessage, ChatRequest, ChatResponse
+from src.services.agent_executor import AgentExecutor
 from src.services.analyzer import ContextAnalyzer
 from src.services.circuit_breaker import CircuitBreaker
-from src.services.comm_logger import comm_log_buffer
 from src.services.compressor import ContextCompressor
 from src.services.context_manager import ContextManager
 from src.services.intent_classifier import IntentClassifier
@@ -75,6 +72,9 @@ class Gateway(IRouter):
         self._breakers: dict[ProviderType, CircuitBreaker] = {
             p: CircuitBreaker() for p in ProviderType
         }
+        self.agent_executor = AgentExecutor(self.analyzer, self._get_agent_adapter)
+        # 백그라운드 recovery_task 와 admin /probe 의 동시 호출 직렬화(L1).
+        self._recover_lock = asyncio.Lock()
         self.resilience = ResilienceManager(
             self.key_manager,
             self.analyzer,
@@ -82,11 +82,8 @@ class Gateway(IRouter):
             self.session_manager,
             self.max_retries,
             get_provider_adapter=self._get_provider_adapter,
-            process_with_agent=self._process_with_agent_wrap,
+            process_with_agent=self.agent_executor.process,
         )
-
-    async def _process_with_agent_wrap(self, request: ChatRequest, decision: RoutingDecision) -> ChatResponse:
-        return await self._process_with_agent(request, decision)
 
     async def process_request(
         self, request: ChatRequest, endpoint: str = "chat"
@@ -320,122 +317,6 @@ class Gateway(IRouter):
                 self._adapters[adapter_key] = CerebrasAdapter(api_key)
         return self._adapters[adapter_key]
 
-    _CHAT_MODEL_PREFERENCE: tuple[str, ...] = (
-        "llama",
-        "qwen",
-        "mistral",
-        "gemma",
-        "phi",
-        "deepseek",
-        "yi",
-        "wizardlm",
-    )
-
-    _NON_CHAT_MODEL_MARKERS: tuple[str, ...] = (
-        "embed",
-        "embedding",
-        "rerank",
-        "vision-adapter",
-        "bge-",
-        "gte-",
-        "e5-",
-        "nomic-embed",
-        "mxbai-embed",
-        "jina-embed",
-        "snowflake-arctic-embed",
-        "whisper",
-        "clip",
-    )
-
-    def _is_chat_capable_model(self, model_id: str) -> bool:
-        lowered = model_id.lower()
-        return not any(marker in lowered for marker in self._NON_CHAT_MODEL_MARKERS)
-
-    def _pick_preferred_chat_model(self, models: list[str]) -> str | None:
-        chat_models = [m for m in models if self._is_chat_capable_model(m)]
-        if not chat_models:
-            return None
-        for preferred in self._CHAT_MODEL_PREFERENCE:
-            for m in chat_models:
-                if preferred in m.lower():
-                    return m
-        return chat_models[0]
-
-    async def _process_with_agent(
-        self, request: ChatRequest, decision: RoutingDecision
-    ) -> ChatResponse:
-        agent = decision.agent
-        if not agent:
-            msg = "No agent"
-            raise ResourceExhaustedError(msg)
-
-        discovered_models = self.analyzer.get_all_discovered_models_info()
-        agent_models = [
-            m["id"]
-            for m in discovered_models
-            if m.get("owned_by") == agent.value
-            and (
-                m["id"].lower().startswith(agent.value.lower())
-                or m.get("display_name", "").lower().startswith(agent.value.lower())
-            )
-        ]
-
-        if not agent_models:
-            adapter = self._get_agent_adapter(agent)
-            try:
-                new_models = await adapter.discover_models()
-                for m_info in new_models:
-                    self.analyzer.register_model(m_info["id"], agent, m_info)
-                agent_models = [m["id"] for m in new_models]
-            except Exception as disc_err:
-                logger.warning(
-                    f"Failed to discover models for agent {agent.value}: {disc_err}"
-                )
-
-        model_requested = decision.model_name
-        needs_resolution = (
-            not model_requested
-            or model_requested == agent.value
-            or model_requested == "auto"
-            or model_requested not in agent_models
-            or not self._is_chat_capable_model(model_requested)
-        )
-
-        if needs_resolution:
-            target = self._pick_preferred_chat_model(agent_models)
-            if target is None:
-                fallback_model = "llama3"
-                logger.warning(
-                    f"Agent {agent.value} has no chat-capable model discovered; "
-                    f"falling back to '{fallback_model}'"
-                )
-                decision.model_name = fallback_model
-                request.model = fallback_model
-            else:
-                decision.model_name = target
-                request.model = target
-
-        adapter = self._get_agent_adapter(agent)
-        resp = await adapter.generate(request, "local-agent")
-
-        full_model_path = f"LOCAL-AGENT/{agent.value.upper()}/{decision.model_name}"
-        if decision.model_name.startswith(agent.value + "/"):
-            m_parts = decision.model_name.split("/", 1)
-            full_model_path = f"LOCAL-AGENT/{m_parts[0].upper()}/{m_parts[1]}"
-
-        if not resp.usage:
-            resp.usage = {}
-        resp.usage.update(
-            {
-                "gateway_provider": "LOCAL-AGENT",
-                "gateway_key_index": 0,
-                "gateway_model": full_model_path,
-                "routing_reason": decision.reason,
-            }
-        )
-        resp.model = full_model_path
-        return resp
-
     def _get_agent_adapter(self, agent: AgentType) -> ILLMProvider:
         key = (agent, "local-agent")
         if key not in self._adapters:
@@ -451,9 +332,24 @@ class Gateway(IRouter):
         return self._adapters[key]
 
     async def recover_failed_keys(self) -> None:
+        # 동시 복구(백그라운드 60s + admin /probe) 중복 방지(L1): 진행 중이면 생략.
+        if self._recover_lock.locked():
+            return
+        async with self._recover_lock:
+            await self._recover_failed_keys_impl()
+
+    async def _recover_failed_keys_impl(self) -> None:
+        now = time.time()
         for p in ProviderType:
             failed = self.key_manager.get_failed_keys(p)
             for k in failed:
+                # 60초 폴링은 주기일 뿐, 카테고리별 쿨다운(403→24h/quota→1h/기타→5m)을
+                # 존중한다. cooldown_until 이 아직 미래면 재프로브하지 않고 건너뛴다.
+                cooldown_until = self.key_manager.get_key_metadata(p, k).get(
+                    "cooldown_until", 0
+                )
+                if cooldown_until > now:
+                    continue
                 try:
                     meta = await self._get_provider_adapter(p, k).probe_key(k)
                     if meta.get("status") == "failed":

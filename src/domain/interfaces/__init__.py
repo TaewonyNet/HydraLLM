@@ -1,5 +1,6 @@
 from .logic import (
     IContextAnalyzer,
+    IContextManager,
     IKeyManager,
     ILLMProvider,
     IRouter,
@@ -8,6 +9,7 @@ from .logic import (
 
 __all__ = [
     "IContextAnalyzer",
+    "IContextManager",
     "IKeyManager",
     "ILLMProvider",
     "IRouter",

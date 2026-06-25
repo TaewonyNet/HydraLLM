@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Any
 
@@ -6,18 +7,18 @@ import google.generativeai as genai
 from src.core.exceptions import RateLimitError, ServiceUnavailableError
 from src.core.logging import get_logger
 from src.domain.enums import ModelType
-from src.domain.interfaces import ILLMProvider
+from src.domain.interfaces import IContextManager, ILLMProvider
 from src.domain.models import ChatMessage, ChatMessageChoice, ChatRequest, ChatResponse
-from src.services.context_manager import ContextManager
 
 logger = get_logger(__name__)
 
 
 class GeminiAdapter(ILLMProvider):
-    def __init__(self, api_key: str, context_manager: ContextManager | None = None):
+    def __init__(self, api_key: str, context_manager: IContextManager | None = None):
         genai.configure(api_key=api_key)
         self._discovered_models: list[dict[str, Any]] = []
         self.context_manager = context_manager
+        self._discover_lock = asyncio.Lock()  # 첫 요청들의 중복 discover 방지
         logger.info("GeminiAdapter initialized")
 
     def get_supported_models(self) -> list[ModelType]:
@@ -39,10 +40,15 @@ class GeminiAdapter(ILLMProvider):
     async def generate(self, request: ChatRequest, api_key: str) -> ChatResponse:
         uploaded_files: list[Any] = []
         try:
+            # 주의(R9, 알려진 한계): google.generativeai 의 configure 는 '모듈 전역' 키를
+            # 설정한다. 서로 다른 키의 동시 요청이 이 전역을 덮어쓰면 키가 뒤섞일 수 있다.
+            # 근본 해결은 client-instance API(google-genai) 이관이며 별도 과제로 추적한다.
             genai.configure(api_key=api_key)
 
             if not self._discovered_models:
-                await self.discover_models()
+                async with self._discover_lock:
+                    if not self._discovered_models:
+                        await self.discover_models()
 
             if not request.messages:
                 err_msg = "No messages provided in request"
@@ -72,7 +78,9 @@ class GeminiAdapter(ILLMProvider):
                             tmp_path = self.context_manager.prepare_temp_file(
                                 content_str
                             )
-                            file_handle = genai.upload_file(
+                            # 동기 블로킹 SDK 호출은 스레드에서 실행(이벤트루프 보호, R8).
+                            file_handle = await asyncio.to_thread(
+                                genai.upload_file,
                                 path=tmp_path,
                                 display_name=f"ctx_{content_hash[:8]}.txt",
                             )
@@ -304,7 +312,9 @@ class GeminiAdapter(ILLMProvider):
     async def discover_models(self) -> list[dict[str, Any]]:
         try:
             models = []
-            for m in genai.list_models():
+            # genai.list_models() 는 동기 블로킹이므로 스레드에서 수집(R8).
+            discovered = await asyncio.to_thread(lambda: list(genai.list_models()))
+            for m in discovered:
                 if "generateContent" in m.supported_generation_methods:
                     name = m.name.replace("models/", "")
                     m_info = {

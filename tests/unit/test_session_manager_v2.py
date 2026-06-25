@@ -190,6 +190,25 @@ class TestCompaction:
         assert len(compaction_parts) >= 1
 
     @pytest.mark.asyncio
+    async def test_compaction_dedups_summary_input(self, sm: SessionManager) -> None:
+        """동일 내용 메시지는 요약 입력에서 dedup 되어야 한다(MemoryOptimizer 강화)."""
+        sid = await sm.create_session()
+        dup = "REPEATED CONTENT " + "z" * 2000
+        for _ in range(20):
+            await sm.save_message(sid, "user", dup)
+        assert sm.is_overflow(sid)
+
+        mock_compressor = MagicMock()
+        mock_compressor.compress.return_value = "S"
+        await sm.compact(sid, mock_compressor)
+
+        # 요약기에 전달된 입력(old_text)에서 동일 항목은 1회만 등장해야 한다.
+        assert mock_compressor.compress.called
+        old_text = mock_compressor.compress.call_args.args[0]
+        lines = [ln for ln in old_text.split("\n") if ln.strip()]
+        assert len(lines) == 1, f"dedup expected 1 line, got {len(lines)}"
+
+    @pytest.mark.asyncio
     async def test_selective_pruning_web_fetch(self, sm: SessionManager) -> None:
         """컴팩션 시 web_fetch 파트가 우선 pruning 되어야 한다."""
         sid = await sm.create_session()

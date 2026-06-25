@@ -1,6 +1,7 @@
-import time
 import logging
+import time
 from typing import Any
+
 from src.domain.models import ChatMessage, ChatRequest
 from src.services.observability import Observability
 

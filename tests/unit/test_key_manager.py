@@ -38,16 +38,16 @@ class TestKeyManager:
         key = asyncio.run(self.key_manager.get_next_key(ProviderType.GEMINI))
         assert key in keys
 
-    def test_get_next_key_round_robin(self):
-        """Test round-robin key selection"""
+    def test_get_next_key_selects_from_active_pool(self):
+        """키 선택은 활성 풀에서 무작위(random.choice). N회 추출 시 모든 활성 키가 등장해야 한다."""
         self.key_manager.add_keys(ProviderType.GEMINI, ["key1", "key2"])
 
-        key1 = asyncio.run(self.key_manager.get_next_key(ProviderType.GEMINI))
-        key2 = asyncio.run(self.key_manager.get_next_key(ProviderType.GEMINI))
-
-        # Should be different keys (round-robin)
-        assert key1 in ["key1", "key2"]
-        assert key2 in ["key1", "key2"]
+        picks = {
+            asyncio.run(self.key_manager.get_next_key(ProviderType.GEMINI))
+            for _ in range(50)
+        }
+        # 충분히 추출하면 두 활성 키가 모두 선택됨(분산 확인, round-robin 아님).
+        assert picks == {"key1", "key2"}
 
     def test_get_next_key_with_no_keys(self):
         """Test getting key when no keys are configured"""

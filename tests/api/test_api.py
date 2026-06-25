@@ -200,7 +200,8 @@ class TestAPI:
         )
 
         assert response.status_code == 500
-        assert response.json()["detail"] == "Unexpected error"
+        # 내부 예외 원문은 마스킹되고 일반 메시지만 노출된다(정보 누출 방지).
+        assert response.json()["detail"] == "Internal server error"
 
     def test_root_endpoint(self):
         """Test root endpoint."""

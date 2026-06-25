@@ -48,10 +48,12 @@ class CerebrasAdapter(ILLMProvider):
             return self._convert_to_chat_response(response)
         except Exception as e:
             logger.error(f"Cerebras request failed: {str(e)}")
-            if hasattr(e, "response") and e.response.status_code == 429:
+            # response 가 없거나 None 일 수 있으므로 안전하게 status_code 추출(R1).
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code == 429:
                 msg = f"Rate limit exceeded: {str(e)}"
                 raise ProviderRateLimitError(msg) from e
-            elif hasattr(e, "response") and str(e.response.status_code).startswith("5"):
+            elif status_code is not None and str(status_code).startswith("5"):
                 msg = f"Server error: {str(e)}"
                 raise ProviderServerError(msg) from e
             else:
