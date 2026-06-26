@@ -334,6 +334,52 @@ class GeminiAdapter(ILLMProvider):
             logger.error(f"Failed to discover Gemini models: {e}")
             return []
 
+    # 무료/프리미엄 모델 우선순위(앞쪽 우선). 첫 사용 가능(200/429) 모델을 채택한다.
+    _FREE_MODEL_PRIORITY = (
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-flash-latest",
+        "gemini-1.5-flash",
+    )
+    _PREMIUM_MODEL_PRIORITY = (
+        "gemini-2.5-pro",
+        "gemini-pro-latest",
+        "gemini-1.5-pro",
+    )
+
+    async def find_working_model(self, api_key: str, tier: str = "free") -> str | None:
+        """우선순위 후보를 경량 probe(max_output_tokens=1)해 사용 가능한 첫 모델 반환.
+
+        200(정상)·429(권한 OK·쿼터 소진)는 채택, 403/404(권한 없음·미존재)는 스킵한다.
+        discover_models 로 발견된 목록과 교집합만 시도해 불필요한 404 probe 를 줄인다.
+        후보를 우선순위대로 돌며 첫 성공에서 즉시 중단해 무료 쿼터 소모를 최소화한다.
+        """
+        genai.configure(api_key=api_key)
+        priority = (
+            self._FREE_MODEL_PRIORITY if tier == "free" else self._PREMIUM_MODEL_PRIORITY
+        )
+        discovered = {m["id"] for m in (getattr(self, "_discovered_models", None) or [])}
+        candidates = [m for m in priority if not discovered or m in discovered]
+        for model_name in candidates:
+            try:
+                model = genai.GenerativeModel(model_name)
+                await model.generate_content_async(
+                    "hi", generation_config={"max_output_tokens": 1}
+                )
+                logger.info("사용 가능 모델 확인: %s (tier=%s)", model_name, tier)
+                return model_name
+            except Exception as e:
+                err = str(e).lower()
+                if "429" in err or "resource_exhausted" in err or "quota" in err:
+                    logger.info("모델 %s 권한 OK·쿼터 소진(429) → 채택", model_name)
+                    return model_name
+                if any(s in err for s in ("403", "permission", "404", "not found")):
+                    logger.info("모델 %s 사용 불가 → 스킵", model_name)
+                    continue
+                logger.warning("모델 %s probe 오류 → 스킵: %s", model_name, str(e)[:60])
+                continue
+        return None
+
     async def probe_key(self, api_key: str) -> dict[str, Any]:
         try:
             genai.configure(api_key=api_key)

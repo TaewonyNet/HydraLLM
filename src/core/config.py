@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     session_compact_threshold: int = 6000  # 토큰 추정치 초과 시 compaction 트리거
     session_recent_window: int = 4  # compaction 시 유지할 최근 메시지 수
 
+    # 무료 티어 쿼터 모니터링 근사 한도(제공자 문서 기준, 변동 시 .env 로 조정).
+    # GCP 의 정확한 실시간 잔량은 API 키만으로 조회 불가하므로 자체 카운트와 비교용.
+    quota_rpm_free: int = 10  # 분당 요청 한도(무료, 대표값)
+    quota_rpd_free: int = 250  # 일일 요청 한도(무료, 대표값)
+
     model_config = {
         "env_file": ".env",
         "case_sensitive": False,

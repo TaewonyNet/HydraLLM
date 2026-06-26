@@ -181,11 +181,19 @@ async def refresh_models(
 
 @router.post("/admin/probe")
 async def probe_keys(
+    active: bool = False,
     gateway: Gateway = Depends(get_gateway),
     authenticated: bool = Depends(verify_admin_auth),
 ) -> dict[str, Any]:
-    """Force probe of all API keys."""
+    """키 probe. 기본은 실패 키 복구만. active=true 면 활성 키도 실측 probe 한다.
+
+    active=true 는 외부 사용(다른 도구/키 공유)으로 인한 쿼터 소진까지 실측 반영하나,
+    probe 자체가 무료 쿼터를 소모하므로 필요시에만 호출할 것.
+    """
     await gateway.recover_failed_keys()
+    if active:
+        probe_result = await gateway.probe_active_keys()
+        return {"status": "success", "active_probe": probe_result}
     return {"status": "success"}
 
 

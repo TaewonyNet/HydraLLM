@@ -57,6 +57,14 @@ class ContextAnalyzer(IContextAnalyzer):
             ProviderType.CEREBRAS: 0.00001,
         }
 
+    def set_default_free_model(self, model: str) -> None:
+        """startup 모델 탐색이 사용 가능 모델을 찾으면 기본 무료 모델을 동적 교체한다."""
+        self._default_free_model = model
+
+    def set_default_premium_model(self, model: str) -> None:
+        """startup 모델 탐색 결과로 기본 프리미엄 모델을 동적 교체한다."""
+        self._default_premium_model = model
+
     def _pick_fast_provider(
         self, available_tiers: dict[ProviderType, set[str]] | None
     ) -> ProviderType | None:

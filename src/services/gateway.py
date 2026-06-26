@@ -338,6 +338,46 @@ class Gateway(IRouter):
         async with self._recover_lock:
             await self._recover_failed_keys_impl()
 
+    async def probe_active_keys(self) -> dict[str, int]:
+        """활성 키를 실제 호출로 probe 해 '외부 사용 포함' 실측 가용성을 갱신한다.
+
+        자체 카운트는 HydraLLM 경유분만 세므로, 다른 도구/키 공유로 인한 쿼터 소진을
+        놓친다. 이 메서드는 각 활성 키를 경량 probe(generateContent 1토큰)해 실제 상태를
+        확인한다 — 429(외부 포함 소진)는 쿨다운, 성공은 last_probe 기록.
+        ⚠ probe 자체가 무료 쿼터를 소모하므로 on-demand/긴 주기로만 호출할 것.
+        """
+        result = {"probed": 0, "ok": 0, "exhausted": 0, "denied": 0, "skipped": 0}
+        for p in (ProviderType.GEMINI, ProviderType.GROQ, ProviderType.CEREBRAS):
+            for k in self.key_manager.get_active_keys(p):
+                adapter = self._get_provider_adapter(p, k)
+                prober = getattr(adapter, "probe_key", None)
+                if prober is None:
+                    result["skipped"] += 1
+                    continue
+                result["probed"] += 1
+                try:
+                    meta = await prober(k)
+                    self.key_manager.update_key_metadata(
+                        p, k, {"last_probe": {"status": "ok", "ts": time.time()}}
+                    )
+                    if isinstance(meta, dict) and meta.get("status") != "failed":
+                        self.key_manager.update_key_metadata(p, k, meta)
+                    result["ok"] += 1
+                except Exception as e:
+                    err = str(e).lower()
+                    is_exhausted = (
+                        "429" in err or "quota" in err or "resource_exhausted" in err
+                    )
+                    is_denied = "403" in err or "permission" in err or "denied" in err
+                    if is_exhausted or is_denied:
+                        await self.key_manager.report_failure(p, k, e)
+                        result["exhausted" if is_exhausted else "denied"] += 1
+                    self.key_manager.update_key_metadata(
+                        p, k, {"last_probe": {"status": "fail", "ts": time.time()}}
+                    )
+        logger.info("활성 키 실측 probe 완료: %s", result)
+        return result
+
     async def _recover_failed_keys_impl(self) -> None:
         now = time.time()
         for p in ProviderType:
@@ -385,6 +425,31 @@ class Gateway(IRouter):
                     self.analyzer.register_model(m["id"], a, m)
             except Exception:
                 pass
+        await self._auto_select_default_model()
+
+    async def _auto_select_default_model(self) -> None:
+        """Gemini 사용 가능 무료 모델을 실측 탐색해 DEFAULT_FREE_MODEL 과 다르면 교체한다.
+
+        고정 DEFAULT(예: gemini-flash-latest)가 특정 프로젝트에서 403/미존재일 때
+        라우팅이 죽지 않도록, startup discovery 직후 우선순위 후보를 probe 해 사용
+        가능한 모델로 자동 전환한다(find_working_model 은 GeminiAdapter 만 보유).
+        """
+        try:
+            k = await self.key_manager.get_next_key(ProviderType.GEMINI)
+        except Exception:
+            return  # Gemini 키 없음 → 교체 불가, 기존 유지
+        try:
+            adapter = self._get_provider_adapter(ProviderType.GEMINI, k)
+            finder = getattr(adapter, "find_working_model", None)
+            if finder is None:
+                return
+            working = await finder(k, "free")
+            if working and working != self.analyzer._default_free_model:
+                old = self.analyzer._default_free_model
+                self.analyzer.set_default_free_model(working)
+                logger.info("기본 무료 모델 자동 교체: %s → %s", old, working)
+        except Exception as e:
+            logger.warning("기본 모델 자동 탐색 실패(기존 유지): %s", e)
 
     def initialize_settings(self) -> None:
         from .session_manager import SessionManager
@@ -416,6 +481,12 @@ class Gateway(IRouter):
                     "failed_keys": data["failed"],
                     "total_keys": data["total"],
                 }
+                for p, data in key_status.items()
+                if isinstance(p, ProviderType)
+            },
+            # 키별 쿼터 모니터링용 상세(분/일 사용량·한도·쿨다운). UI 대시보드가 소비.
+            "key_statistics": {
+                p.value: data
                 for p, data in key_status.items()
                 if isinstance(p, ProviderType)
             },

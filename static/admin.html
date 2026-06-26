@@ -335,11 +335,27 @@
             if (!healthData) return;
             grid.innerHTML = healthData.map(h => {
                 const providerKeys = lastKeyStatistics ? (lastKeyStatistics[h.provider] || lastKeyStatistics[h.provider.toLowerCase()] || {}).keys || [] : [];
-                const keyStatusList = providerKeys.map(k => `
-                    <span class="badge ${k.status === 'active' ? 'badge-info' : 'badge-error'}" style="margin-right:5px; margin-bottom:5px; display:inline-block;">
-                        #${k.index + 1} / ${k.tier}
-                    </span>
-                `).join('');
+                const keyStatusList = providerKeys.map(k => {
+                    const q = k.quota || {};
+                    const pct = q.day_pct || 0;
+                    const barColor = pct >= 90 ? 'var(--danger)' : (pct >= 70 ? 'var(--warning)' : 'var(--success)');
+                    const cd = q.cooldown_remaining_sec > 0 ? ` · 쿨다운 ${Math.ceil(q.cooldown_remaining_sec/60)}m` : '';
+                    const rs = q.day_reset_in_sec || 0;
+                    const resetTxt = `${Math.floor(rs/3600)}h${Math.floor((rs%3600)/60)}m`;
+                    const flags = (q.is_forbidden ? ' · ⛔403' : '') + (q.is_quota_limit ? ' · ⚠쿼터' : '');
+                    return `
+                    <div style="border:1px solid #eee; border-radius:6px; padding:6px 8px; margin-bottom:6px; font-size:0.75rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span><strong>#${k.index + 1}</strong> ${esc(k.tier)}
+                                <span class="badge badge-${k.status === 'active' ? 'success' : 'error'}" style="font-size:0.6rem;">${esc(k.status)}</span>${cd}</span>
+                            <span>일일 ${q.day_used || 0}/${q.day_limit || '-'} (${pct}%)</span>
+                        </div>
+                        <div style="background:#eee; border-radius:3px; height:5px; margin-top:4px;">
+                            <div style="width:${Math.min(100, pct)}%; height:5px; background:${barColor}; border-radius:3px;"></div>
+                        </div>
+                        <div style="color:#999; margin-top:3px;">분당 ${q.minute_used || 0}/${q.minute_limit || '-'} · 일일리셋 ${resetTxt}${flags}</div>
+                    </div>`;
+                }).join('');
 
                 return `
                 <div class="card">
