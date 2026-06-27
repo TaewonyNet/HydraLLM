@@ -73,13 +73,17 @@ async def test_context_preserved_across_model_switch(isolated_session_manager):
 
     decision_groq = MagicMock()
     decision_groq.provider = ProviderType.GROQ
+    decision_groq.agent = None
     decision_groq.model_name = "llama-3.3-70b-versatile"
     decision_groq.reason = "test"
+    decision_groq.strict = False
 
     decision_gemini = MagicMock()
     decision_gemini.provider = ProviderType.GEMINI
+    decision_gemini.agent = None
     decision_gemini.model_name = "gemini-2.5-flash"
     decision_gemini.reason = "test"
+    decision_gemini.strict = False
 
     gateway.analyzer.analyze = AsyncMock(
         side_effect=[decision_groq, decision_gemini]
@@ -105,7 +109,7 @@ async def test_context_preserved_across_model_switch(isolated_session_manager):
             return gemini_adapter
         return MagicMock()
 
-    gateway._get_provider_adapter = MagicMock(side_effect=get_adapter)
+    gateway.resilience._get_provider_adapter = MagicMock(side_effect=get_adapter)
 
     session_id = f"switch-{uuid4().hex[:8]}"
 

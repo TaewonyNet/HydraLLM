@@ -4,7 +4,8 @@ from contextvars import ContextVar
 from typing import Any
 
 logger = logging.getLogger(__name__)
-trace_ctx: ContextVar[dict[str, Any]] = ContextVar("trace", default={})
+# default 은 None(공유 가변 dict footgun 방지). start_trace 가 요청별로 set 한다(L3).
+trace_ctx: ContextVar[dict[str, Any] | None] = ContextVar("trace", default=None)
 
 
 class Observability:

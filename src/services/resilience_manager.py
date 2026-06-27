@@ -1,11 +1,14 @@
 import asyncio
 import logging
-import time
 from typing import Any
-from src.core.exceptions import RateLimitError, ResourceExhaustedError, ServiceUnavailableError
+
+from src.core.exceptions import (
+    RateLimitError,
+    ResourceExhaustedError,
+    ServiceUnavailableError,
+)
 from src.domain.enums import AgentType, ProviderType
 from src.domain.models import ChatRequest, ChatResponse, RoutingDecision
-from src.domain.interfaces import ILLMProvider
 from src.services.comm_logger import comm_log_buffer
 
 logger = logging.getLogger(__name__)
@@ -34,16 +37,14 @@ class ResilienceManager:
     ) -> tuple[ChatResponse, list[dict[str, Any]]]:
         retry_parts: list[dict[str, Any]] = []
 
-        is_strict = False
-        original_hint = (request.model or "").lower()
-        
-        has_prefix = "/" in original_hint
-        is_local_path = "local-agent" in original_hint or any(a.value in original_hint for a in AgentType)
-
-        if has_prefix or is_local_path:
-            if is_local_path or any(p.value in original_hint for p in ProviderType) or "auto" in original_hint:
-                is_strict = True
-                logger.info(f"Using STRICT routing for {original_hint}")
+        # strict 판정은 analyzer 가 원본 힌트로 결정해 decision 에 실어준다(S1). 여기서
+        # request.model(이미 decision.model_name 으로 덮어쓰임)을 재파싱하지 않는다.
+        is_strict = decision.strict
+        if is_strict:
+            logger.info(
+                f"Using STRICT routing (decision.strict) for "
+                f"provider={decision.provider} agent={decision.agent}"
+            )
 
         if is_strict and decision.agent:
             try:
@@ -85,7 +86,8 @@ class ResilienceManager:
             providers_to_try.append(decision.provider)
 
 
-        if not providers_to_try or (original_hint in ["auto", "default", "mllm/auto"]):
+        # 비-strict(auto/별칭) 요청은 클라우드 키가 전무하면 로컬로 우아하게 저하한다.
+        if not providers_to_try or not is_strict:
             has_any_cloud_active = False
             for p in [ProviderType.GEMINI, ProviderType.GROQ, ProviderType.CEREBRAS]:
                 if self.key_manager.get_available_keys_count(p) > 0:
@@ -126,7 +128,7 @@ class ResilienceManager:
                 request.model = new_model
                 decision.model_name = new_model
                 decision.provider = provider_type
-            
+
             if not is_strict and decision.agent and provider_type == providers_to_try[0]:
                 continue
 
@@ -166,7 +168,8 @@ class ResilienceManager:
                         self.enrich_response_usage(response, provider_type, api_key, decision)
                         return response, retry_parts
                     else:
-                        raise Exception("Empty response from adapter")
+                        msg = "Empty response from adapter"
+                        raise RuntimeError(msg)
 
                 except (RateLimitError, ResourceExhaustedError) as e:
                     self.breakers[provider_type].report_failure()
@@ -188,7 +191,7 @@ class ResilienceManager:
                     self.breakers[provider_type].report_failure()
                     if api_key:
                         await self.key_manager.report_failure(provider_type, api_key, e)
-                    
+
                     if is_strict:
                         raise e
 
@@ -207,10 +210,10 @@ class ResilienceManager:
                         or "unauthorized" in err_msg
                     ):
                         await self.key_manager.report_failure(provider_type, api_key, e)
-                    
+
                     if is_strict:
                         raise e
-                    
+
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(1)
                     else:

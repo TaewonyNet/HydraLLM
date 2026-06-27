@@ -12,17 +12,14 @@ from src.adapters.providers.openai_compat import OpenAICompatAdapter
 from src.core.config import settings
 from src.core.exceptions import (
     BaseAppError,
-    RateLimitError,
-    ResourceExhaustedError,
-    ServiceUnavailableError,
 )
 from src.core.logging import request_id_ctx
 from src.domain.enums import AgentType, ModelType, ProviderType
 from src.domain.interfaces import ILLMProvider, IRouter, ISessionManager
-from src.domain.models import ChatMessage, ChatRequest, ChatResponse, RoutingDecision
+from src.domain.models import ChatMessage, ChatRequest, ChatResponse
+from src.services.agent_executor import AgentExecutor
 from src.services.analyzer import ContextAnalyzer
 from src.services.circuit_breaker import CircuitBreaker
-from src.services.comm_logger import comm_log_buffer
 from src.services.compressor import ContextCompressor
 from src.services.context_manager import ContextManager
 from src.services.intent_classifier import IntentClassifier
@@ -75,6 +72,9 @@ class Gateway(IRouter):
         self._breakers: dict[ProviderType, CircuitBreaker] = {
             p: CircuitBreaker() for p in ProviderType
         }
+        self.agent_executor = AgentExecutor(self.analyzer, self._get_agent_adapter)
+        # 백그라운드 recovery_task 와 admin /probe 의 동시 호출 직렬화(L1).
+        self._recover_lock = asyncio.Lock()
         self.resilience = ResilienceManager(
             self.key_manager,
             self.analyzer,
@@ -82,11 +82,8 @@ class Gateway(IRouter):
             self.session_manager,
             self.max_retries,
             get_provider_adapter=self._get_provider_adapter,
-            process_with_agent=self._process_with_agent_wrap,
+            process_with_agent=self.agent_executor.process,
         )
-
-    async def _process_with_agent_wrap(self, request: ChatRequest, decision: RoutingDecision) -> ChatResponse:
-        return await self._process_with_agent(request, decision)
 
     async def process_request(
         self, request: ChatRequest, endpoint: str = "chat"
@@ -320,122 +317,6 @@ class Gateway(IRouter):
                 self._adapters[adapter_key] = CerebrasAdapter(api_key)
         return self._adapters[adapter_key]
 
-    _CHAT_MODEL_PREFERENCE: tuple[str, ...] = (
-        "llama",
-        "qwen",
-        "mistral",
-        "gemma",
-        "phi",
-        "deepseek",
-        "yi",
-        "wizardlm",
-    )
-
-    _NON_CHAT_MODEL_MARKERS: tuple[str, ...] = (
-        "embed",
-        "embedding",
-        "rerank",
-        "vision-adapter",
-        "bge-",
-        "gte-",
-        "e5-",
-        "nomic-embed",
-        "mxbai-embed",
-        "jina-embed",
-        "snowflake-arctic-embed",
-        "whisper",
-        "clip",
-    )
-
-    def _is_chat_capable_model(self, model_id: str) -> bool:
-        lowered = model_id.lower()
-        return not any(marker in lowered for marker in self._NON_CHAT_MODEL_MARKERS)
-
-    def _pick_preferred_chat_model(self, models: list[str]) -> str | None:
-        chat_models = [m for m in models if self._is_chat_capable_model(m)]
-        if not chat_models:
-            return None
-        for preferred in self._CHAT_MODEL_PREFERENCE:
-            for m in chat_models:
-                if preferred in m.lower():
-                    return m
-        return chat_models[0]
-
-    async def _process_with_agent(
-        self, request: ChatRequest, decision: RoutingDecision
-    ) -> ChatResponse:
-        agent = decision.agent
-        if not agent:
-            msg = "No agent"
-            raise ResourceExhaustedError(msg)
-
-        discovered_models = self.analyzer.get_all_discovered_models_info()
-        agent_models = [
-            m["id"]
-            for m in discovered_models
-            if m.get("owned_by") == agent.value
-            and (
-                m["id"].lower().startswith(agent.value.lower())
-                or m.get("display_name", "").lower().startswith(agent.value.lower())
-            )
-        ]
-
-        if not agent_models:
-            adapter = self._get_agent_adapter(agent)
-            try:
-                new_models = await adapter.discover_models()
-                for m_info in new_models:
-                    self.analyzer.register_model(m_info["id"], agent, m_info)
-                agent_models = [m["id"] for m in new_models]
-            except Exception as disc_err:
-                logger.warning(
-                    f"Failed to discover models for agent {agent.value}: {disc_err}"
-                )
-
-        model_requested = decision.model_name
-        needs_resolution = (
-            not model_requested
-            or model_requested == agent.value
-            or model_requested == "auto"
-            or model_requested not in agent_models
-            or not self._is_chat_capable_model(model_requested)
-        )
-
-        if needs_resolution:
-            target = self._pick_preferred_chat_model(agent_models)
-            if target is None:
-                fallback_model = "llama3"
-                logger.warning(
-                    f"Agent {agent.value} has no chat-capable model discovered; "
-                    f"falling back to '{fallback_model}'"
-                )
-                decision.model_name = fallback_model
-                request.model = fallback_model
-            else:
-                decision.model_name = target
-                request.model = target
-
-        adapter = self._get_agent_adapter(agent)
-        resp = await adapter.generate(request, "local-agent")
-
-        full_model_path = f"LOCAL-AGENT/{agent.value.upper()}/{decision.model_name}"
-        if decision.model_name.startswith(agent.value + "/"):
-            m_parts = decision.model_name.split("/", 1)
-            full_model_path = f"LOCAL-AGENT/{m_parts[0].upper()}/{m_parts[1]}"
-
-        if not resp.usage:
-            resp.usage = {}
-        resp.usage.update(
-            {
-                "gateway_provider": "LOCAL-AGENT",
-                "gateway_key_index": 0,
-                "gateway_model": full_model_path,
-                "routing_reason": decision.reason,
-            }
-        )
-        resp.model = full_model_path
-        return resp
-
     def _get_agent_adapter(self, agent: AgentType) -> ILLMProvider:
         key = (agent, "local-agent")
         if key not in self._adapters:
@@ -451,9 +332,64 @@ class Gateway(IRouter):
         return self._adapters[key]
 
     async def recover_failed_keys(self) -> None:
+        # 동시 복구(백그라운드 60s + admin /probe) 중복 방지(L1): 진행 중이면 생략.
+        if self._recover_lock.locked():
+            return
+        async with self._recover_lock:
+            await self._recover_failed_keys_impl()
+
+    async def probe_active_keys(self) -> dict[str, int]:
+        """활성 키를 실제 호출로 probe 해 '외부 사용 포함' 실측 가용성을 갱신한다.
+
+        자체 카운트는 HydraLLM 경유분만 세므로, 다른 도구/키 공유로 인한 쿼터 소진을
+        놓친다. 이 메서드는 각 활성 키를 경량 probe(generateContent 1토큰)해 실제 상태를
+        확인한다 — 429(외부 포함 소진)는 쿨다운, 성공은 last_probe 기록.
+        ⚠ probe 자체가 무료 쿼터를 소모하므로 on-demand/긴 주기로만 호출할 것.
+        """
+        result = {"probed": 0, "ok": 0, "exhausted": 0, "denied": 0, "skipped": 0}
+        for p in (ProviderType.GEMINI, ProviderType.GROQ, ProviderType.CEREBRAS):
+            for k in self.key_manager.get_active_keys(p):
+                adapter = self._get_provider_adapter(p, k)
+                prober = getattr(adapter, "probe_key", None)
+                if prober is None:
+                    result["skipped"] += 1
+                    continue
+                result["probed"] += 1
+                try:
+                    meta = await prober(k)
+                    self.key_manager.update_key_metadata(
+                        p, k, {"last_probe": {"status": "ok", "ts": time.time()}}
+                    )
+                    if isinstance(meta, dict) and meta.get("status") != "failed":
+                        self.key_manager.update_key_metadata(p, k, meta)
+                    result["ok"] += 1
+                except Exception as e:
+                    err = str(e).lower()
+                    is_exhausted = (
+                        "429" in err or "quota" in err or "resource_exhausted" in err
+                    )
+                    is_denied = "403" in err or "permission" in err or "denied" in err
+                    if is_exhausted or is_denied:
+                        await self.key_manager.report_failure(p, k, e)
+                        result["exhausted" if is_exhausted else "denied"] += 1
+                    self.key_manager.update_key_metadata(
+                        p, k, {"last_probe": {"status": "fail", "ts": time.time()}}
+                    )
+        logger.info("활성 키 실측 probe 완료: %s", result)
+        return result
+
+    async def _recover_failed_keys_impl(self) -> None:
+        now = time.time()
         for p in ProviderType:
             failed = self.key_manager.get_failed_keys(p)
             for k in failed:
+                # 60초 폴링은 주기일 뿐, 카테고리별 쿨다운(403→24h/quota→1h/기타→5m)을
+                # 존중한다. cooldown_until 이 아직 미래면 재프로브하지 않고 건너뛴다.
+                cooldown_until = self.key_manager.get_key_metadata(p, k).get(
+                    "cooldown_until", 0
+                )
+                if cooldown_until > now:
+                    continue
                 try:
                     meta = await self._get_provider_adapter(p, k).probe_key(k)
                     if meta.get("status") == "failed":
@@ -489,6 +425,31 @@ class Gateway(IRouter):
                     self.analyzer.register_model(m["id"], a, m)
             except Exception:
                 pass
+        await self._auto_select_default_model()
+
+    async def _auto_select_default_model(self) -> None:
+        """Gemini 사용 가능 무료 모델을 실측 탐색해 DEFAULT_FREE_MODEL 과 다르면 교체한다.
+
+        고정 DEFAULT(예: gemini-flash-latest)가 특정 프로젝트에서 403/미존재일 때
+        라우팅이 죽지 않도록, startup discovery 직후 우선순위 후보를 probe 해 사용
+        가능한 모델로 자동 전환한다(find_working_model 은 GeminiAdapter 만 보유).
+        """
+        try:
+            k = await self.key_manager.get_next_key(ProviderType.GEMINI)
+        except Exception:
+            return  # Gemini 키 없음 → 교체 불가, 기존 유지
+        try:
+            adapter = self._get_provider_adapter(ProviderType.GEMINI, k)
+            finder = getattr(adapter, "find_working_model", None)
+            if finder is None:
+                return
+            working = await finder(k, "free")
+            if working and working != self.analyzer._default_free_model:
+                old = self.analyzer._default_free_model
+                self.analyzer.set_default_free_model(working)
+                logger.info("기본 무료 모델 자동 교체: %s → %s", old, working)
+        except Exception as e:
+            logger.warning("기본 모델 자동 탐색 실패(기존 유지): %s", e)
 
     def initialize_settings(self) -> None:
         from .session_manager import SessionManager
@@ -520,6 +481,12 @@ class Gateway(IRouter):
                     "failed_keys": data["failed"],
                     "total_keys": data["total"],
                 }
+                for p, data in key_status.items()
+                if isinstance(p, ProviderType)
+            },
+            # 키별 쿼터 모니터링용 상세(분/일 사용량·한도·쿨다운). UI 대시보드가 소비.
+            "key_statistics": {
+                p.value: data
                 for p, data in key_status.items()
                 if isinstance(p, ProviderType)
             },

@@ -20,8 +20,15 @@ except ImportError:
     pass
 
 from bs4 import BeautifulSoup
-from playwright.async_api import Browser, Playwright, async_playwright
+from playwright.async_api import Browser, Playwright, Route, async_playwright
 from scrapling.fetchers import StealthyFetcher
+
+try:
+    # 본문→markdown 추출기(선택). 있으면 신호 밀도 높은 md 로 추출해 토큰 효율을 높이고,
+    # 없으면 기존 BeautifulSoup 텍스트 추출로 폴백한다(무회귀).
+    import trafilatura
+except ImportError:
+    trafilatura = None  # type: ignore[assignment]
 
 from src.i18n import t, t_patterns
 
@@ -29,18 +36,29 @@ logger = logging.getLogger(__name__)
 
 ScrapeMode = Literal["standard", "simple", "network_only"]
 
-# SSRF 차단 대상: private/reserved IP 대역
+# SSRF 차단 대상: CGNAT 등 ipaddress 속성으로 안 잡히는 대역만 명시.
+# 루프백/사설/링크로컬/예약/멀티캐스트/미지정은 _is_blocked_ip 의 속성 검사로 처리한다.
 _BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT (RFC 6598)
 ]
+
+
+def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
+    """내부/예약 대역 여부. IPv4-mapped IPv6(::ffff:x.x.x.x)는 IPv4 로 정규화해 검사."""
+    # ::ffff:127.0.0.1 같은 매핑 주소가 IPv6 로 들어와 루프백 검사를 우회하는 것을 차단.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    if (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    ):
+        return True
+    return any(ip in network for network in _BLOCKED_NETWORKS)
 
 
 def _unwrap_bing_redirect(url: str) -> str | None:
@@ -108,12 +126,37 @@ def _validate_url(url: str) -> str:
 
     for _family, _type, _proto, _canonname, sockaddr in addr_infos:
         ip = ipaddress.ip_address(sockaddr[0])
-        for network in _BLOCKED_NETWORKS:
-            if ip in network:
-                msg = f"Blocked: hostname '{hostname}' resolves to internal address"
-                raise ValueError(msg)
+        if _is_blocked_ip(ip):
+            msg = f"Blocked: hostname '{hostname}' resolves to internal address"
+            raise ValueError(msg)
 
     return url
+
+
+async def _url_resolves_internal(url: str) -> bool:
+    """url 의 호스트가 내부/예약 IP 로 resolve 되는지 검사(예외 없이 bool 반환).
+
+    리다이렉트 후 최종 URL 재검증 및 Playwright route 가드에서 쓰는 best-effort 헬퍼.
+    스킴 비정상·호스트 없음·resolve 실패는 안전하게 '차단'으로 본다. DNS 조회는
+    이벤트 루프를 막지 않도록 executor 에서 수행한다. 단일 resolve 내 rebinding 은
+    구조상 여전히 잔여 위험이다(SPEC §10).
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return True
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return True
+    loop = asyncio.get_event_loop()
+    try:
+        addr_infos = await loop.run_in_executor(
+            None, socket.getaddrinfo, parsed.hostname, parsed.port or 443
+        )
+    except socket.gaierror:
+        return True
+    return any(
+        _is_blocked_ip(ipaddress.ip_address(info[4][0])) for info in addr_infos
+    )
 
 
 class WebScraper:
@@ -121,6 +164,8 @@ class WebScraper:
         self.headless = headless
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
+        # 동시 폴백이 shutdown/startup 을 인터리브하지 않도록 self-heal 직렬화(R5).
+        self._restart_lock = asyncio.Lock()
 
     async def startup(self) -> None:
         """앱 시작 시 호출하여 Playwright 브라우저를 한 번만 실행."""
@@ -143,12 +188,14 @@ class WebScraper:
 
     async def scrape_url(
         self, url: str, mode: ScrapeMode = "standard", timeout_ms: int = 30000
-    ) -> str:
+    ) -> str | None:
+        # 실패/차단 시 None 을 반환한다(로컬라이즈된 에러 문자열을 content 로 오인해
+        # 주입·캐시하던 버그 방지, R3). 성공 시에만 "TITLE: ..." 문자열을 반환.
         try:
             _validate_url(url)
         except ValueError as e:
             logger.warning(f"SSRF blocked: {e}")
-            return str(t("error.blocked_url", url=url))
+            return None
 
         logger.info(f"Scraping URL ({mode}) with Scrapling: {url}")
 
@@ -162,7 +209,14 @@ class WebScraper:
                 logger.error(
                     f"Failed to fetch {url}, status: {response.status if response else 'No response'}"
                 )
-                return str(t("error.fetch_failed", url=url))
+                return None
+
+            # 리다이렉트 재검증: 최초 URL 은 통과했어도 30x 로 내부 주소에 도달했을 수
+            # 있으므로 최종 URL(response.url)을 다시 검사한다(best-effort, SPEC §10).
+            final_url = getattr(response, "url", "") or url
+            if str(final_url) != url and await _url_resolves_internal(str(final_url)):
+                logger.warning(f"SSRF blocked after redirect: {final_url}")
+                return None
 
             title = response.css("title::text").get() or "No Title"
 
@@ -193,13 +247,15 @@ class WebScraper:
 
     async def _fallback_playwright_scrape(
         self, url: str, mode: ScrapeMode, timeout_ms: int
-    ) -> str:
+    ) -> str | None:
         context = None
         try:
             if not self._browser or not self._browser.is_connected():
-                # Self-healing: restart browser if disconnected
-                await self.shutdown()
-                await self.startup()
+                # Self-healing: 동시 폴백이 중복 재시작하지 않도록 락 + 이중 확인(R5).
+                async with self._restart_lock:
+                    if not self._browser or not self._browser.is_connected():
+                        await self.shutdown()
+                        await self.startup()
 
             assert self._browser is not None
 
@@ -216,6 +272,27 @@ class WebScraper:
                 },
             )
 
+            # SSRF route 가드: 문서(네비게이션/리다이렉트) 요청의 목적지가 내부 주소면
+            # 네트워크 레벨에서 abort 한다. 서브리소스는 그대로 통과(content 추출 대상이
+            # 아니므로 SSRF 핵심 경로는 document 요청). 가드 오류 시 fail-safe 로 continue.
+            async def _ssrf_route_guard(route: Route) -> None:
+                req = route.request
+                try:
+                    if req.resource_type == "document" and await _url_resolves_internal(
+                        req.url
+                    ):
+                        logger.warning(f"SSRF blocked (navigation): {req.url}")
+                        await route.abort()
+                        return
+                    await route.continue_()
+                except Exception:
+                    try:
+                        await route.continue_()
+                    except Exception:
+                        pass
+
+            await context.route("**/*", _ssrf_route_guard)
+
             page = await context.new_page()
             try:
                 await page.add_init_script(
@@ -223,6 +300,11 @@ class WebScraper:
                 )
 
                 await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+
+                # 리다이렉트 후 최종 URL 재검증(route 가드를 빠져나간 경우의 방어선).
+                if await _url_resolves_internal(page.url):
+                    logger.warning(f"SSRF blocked after redirect: {page.url}")
+                    return None
 
                 title = await page.title()
                 content = await page.content()
@@ -232,7 +314,7 @@ class WebScraper:
                 await page.close()
         except Exception as e:
             logger.error(f"Playwright fallback failed for {url}: {e}")
-            return f"Error scraping {url}: {str(e)}"
+            return None
         finally:
             if context:
                 await context.close()
@@ -242,6 +324,21 @@ class WebScraper:
 
         # Extract potential publication date
         pub_date = self._extract_publish_date(soup)
+
+        # 0. trafilatura 가 있으면 본문을 markdown 으로 추출(잡음 제거·신호 밀도↑ →
+        #    같은 토큰 예산에 더 많은 정보 → fast tier 도 충분히 답변). 실패 시 아래 BS4 폴백.
+        if trafilatura is not None:
+            md = trafilatura.extract(
+                html,
+                output_format="markdown",
+                include_comments=False,
+                include_tables=True,
+            )
+            if md:
+                md = md.strip()
+                if pub_date:
+                    md = f"[PUBLISHED_DATE: {pub_date}]\n{md}"
+                return md[:25000]
 
         # 1. Remove obvious non-content elements
         for element in soup(
@@ -400,6 +497,8 @@ class WebScraper:
         for url, content in zip(safe_links, results, strict=False):
             if isinstance(content, BaseException):
                 logger.warning(f"scrape_url error for {url}: {content}")
+                continue
+            if not content:  # 실패/차단(None) 결과는 건너뛴다(R3)
                 continue
             combined_results.append(f"--- SOURCE: {url} ---\n{content}\n")
 

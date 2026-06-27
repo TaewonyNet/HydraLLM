@@ -157,32 +157,38 @@ class ChatRequest(BaseModel):
         return prompt_tokens + response_tokens
 
     def _estimate_message_tokens(self, message: ChatMessage) -> int:
-        """Estimate token count for a single message."""
+        """Estimate token count for a single message (멀티모달 list/dict 포함)."""
         content = message.content
-        if isinstance(content, dict) and content.get("type") == "image_url":
-            return 1
         if isinstance(content, str):
             return max(1, len(content) // 4)
+        if isinstance(content, dict):
+            if content.get("type") == "image_url":
+                return 256  # 이미지 파트 대략치
+            return max(1, len(str(content.get("text", ""))) // 4)
+        if isinstance(content, list):
+            total = 0
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    total += 256
+                elif isinstance(part, dict):
+                    total += max(1, len(str(part.get("text", ""))) // 4)
+                else:
+                    total += max(1, len(str(part)) // 4)
+            return max(1, total)
         return 1
 
     def has_images(self) -> bool:
-        """Check if the request contains any image messages."""
-        if not self.messages:
-            return False
-        for msg in self.messages:
+        """구조화된 멀티모달 파트(content 가 dict/list 의 `type==image_url`)로만 이미지
+        유무를 판단한다(R11). 평문 문자열의 'image_url'/URL 언급은 오탐(불필요한 Vision
+        라우팅)이라 더 이상 트리거하지 않는다."""
+        for msg in self.messages or []:
             content = msg.content
             if isinstance(content, dict) and content.get("type") == "image_url":
                 return True
-            if isinstance(content, str):
-                # Check if content contains image URL patterns
-                if "image_url" in content or (
-                    content.startswith("http")
-                    and any(
-                        ext in content.lower()
-                        for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]
-                    )
-                ):
-                    return True
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "image_url":
+                        return True
         return False
 
 
@@ -255,4 +261,11 @@ class RoutingDecision(BaseModel):
     )
     web_search_required: bool = Field(
         False, description="Whether web search/fetch is needed"
+    )
+    strict: bool = Field(
+        False,
+        description=(
+            "명시적 provider/agent 지정(gemini/..., GEMINI/auto, local-agent/...)이면 True. "
+            "True면 ResilienceManager가 교차 공급자 폴백 없이 해당 대상만 시도한다."
+        ),
     )

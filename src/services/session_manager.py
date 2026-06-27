@@ -10,6 +10,7 @@ from typing import Any
 from src.core.config import settings
 from src.domain.interfaces import ISessionManager
 from src.domain.models import ChatMessage, MessagePart, SessionMessage
+from src.services.memory_optimizer import MemoryOptimizer
 from src.utils.ulid import generate_message_id, generate_part_id, generate_session_id
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,12 @@ class SessionManager(ISessionManager):
 
         self.project_id = _get_project_id()
         self._init_db()
+
+        # 메모리 최적화(Compaction V2)는 협업자에 위임한다. DB 는 본 매니저가 소유하므로
+        # 연결 팩토리와 토큰 추정기를 주입한다.
+        self._optimizer = MemoryOptimizer(
+            self._get_conn, self._estimate_session_tokens_sync
+        )
 
     # ─── 커넥션 관리 ───
 
@@ -198,6 +205,8 @@ class SessionManager(ISessionManager):
             except (sqlite3.OperationalError, sqlite3.IntegrityError):
                 with self._get_conn() as conn:
                     conn.execute("PRAGMA foreign_keys=OFF")
+                    # 이전 마이그레이션이 중간 실패해 남긴 orphan 정리(R14).
+                    conn.execute("DROP TABLE IF EXISTS parts_old")
                     conn.execute("ALTER TABLE parts RENAME TO parts_old")
                     conn.execute(
                         """
@@ -216,8 +225,8 @@ class SessionManager(ISessionManager):
                     conn.execute("DROP TABLE parts_old")
                     conn.execute("PRAGMA foreign_keys=ON")
                     conn.commit()
-            except Exception:
-                pass
+            except Exception as mig_err:
+                logger.warning(f"parts schema migration skipped/failed: {mig_err}")
 
         except Exception as e:
             logger.error(f"Failed to initialize SQLite: {e}")
@@ -517,132 +526,13 @@ class SessionManager(ISessionManager):
         tokens = self._estimate_session_tokens_sync(session_id)
         return tokens > settings.session_compact_threshold
 
-    # ─── Compaction V2: 선택적 pruning → 구조화된 요약 ───
-
-    def _compact_sync(self, session_id: str, compressor: Any) -> None:
-        """V2 컴팩션: 선택적 pruning → 구조화된 요약 → CompactionPart 경계 마커."""
-        try:
-            current_tokens = self._estimate_session_tokens_sync(session_id)
-            if current_tokens <= settings.session_compact_threshold:
-                return
-
-            recent_window = settings.session_recent_window
-
-            with self._get_conn() as conn:
-                # Phase A: 선택적 Pruning
-                protected_ids_rows = conn.execute(
-                    "SELECT id FROM messages WHERE session_id = ? "
-                    "ORDER BY rowid DESC LIMIT ?",
-                    (session_id, recent_window),
-                ).fetchall()
-                protected_ids = {row["id"] for row in protected_ids_rows}
-
-                if protected_ids:
-                    placeholders = ",".join(["?"] * len(protected_ids))
-                    conn.execute(
-                        f"UPDATE parts SET data = json_replace(data, '$.content', '[PRUNED]') "
-                        f"WHERE type = 'web_fetch' "
-                        f"AND message_id NOT IN ({placeholders}) "
-                        f"AND message_id IN (SELECT id FROM messages WHERE session_id = ?)",
-                        (*protected_ids, session_id),
-                    )
-                    conn.execute(
-                        f"DELETE FROM parts "
-                        f"WHERE type = 'retry' "
-                        f"AND message_id NOT IN ({placeholders}) "
-                        f"AND message_id IN (SELECT id FROM messages WHERE session_id = ?)",
-                        (*protected_ids, session_id),
-                    )
-                conn.commit()
-
-            # 재측정
-            current_tokens = self._estimate_session_tokens_sync(session_id)
-            if current_tokens <= settings.session_compact_threshold:
-                return
-
-            # Phase B: 구조화된 요약
-            with self._get_conn() as conn:
-                boundary_row2 = conn.execute(
-                    "SELECT m.rowid AS mrowid FROM messages m "
-                    "JOIN parts p ON p.message_id = m.id "
-                    "WHERE m.session_id = ? AND p.type = 'compaction' "
-                    "ORDER BY m.rowid DESC LIMIT 1",
-                    (session_id,),
-                ).fetchone()
-
-                if boundary_row2:
-                    old_msgs = conn.execute(
-                        "SELECT m.id, m.role, p.data FROM messages m "
-                        "JOIN parts p ON p.message_id = m.id "
-                        "WHERE m.session_id = ? AND m.rowid >= ? "
-                        "AND p.type = 'text' ORDER BY m.rowid ASC",
-                        (session_id, boundary_row2["mrowid"]),
-                    ).fetchall()
-                else:
-                    old_msgs = conn.execute(
-                        "SELECT m.id, m.role, p.data FROM messages m "
-                        "JOIN parts p ON p.message_id = m.id "
-                        "WHERE m.session_id = ? AND p.type = 'text' ORDER BY m.rowid ASC",
-                        (session_id,),
-                    ).fetchall()
-
-                to_summarize = []
-                old_msg_ids = set()
-                for row in old_msgs:
-                    if row["id"] not in protected_ids:
-                        data = json.loads(row["data"])
-                        text = data.get("text", "")[:500]
-                        to_summarize.append(f"{row['role']}: {text}")
-                        old_msg_ids.add(row["id"])
-
-                if not to_summarize:
-                    return
-
-                old_text = "\n".join(to_summarize)
-                summary = compressor.compress(
-                    old_text,
-                    instruction="Summarize goal/decisions/discoveries concisely.",
-                    target_token=800,
-                )
-
-                old_msg_list = list(old_msg_ids)
-                if old_msg_list:
-                    placeholders = ",".join(["?"] * len(old_msg_list))
-                    conn.execute(
-                        f"DELETE FROM messages WHERE id IN ({placeholders})",
-                        old_msg_list,
-                    )
-
-                compact_msg_id = generate_message_id()
-                conn.execute(
-                    "INSERT INTO messages (id, session_id, role) VALUES (?, ?, 'system')",
-                    (compact_msg_id, session_id),
-                )
-
-                new_tokens = self._estimate_session_tokens_sync(session_id)
-                conn.execute(
-                    "INSERT INTO parts (id, message_id, type, data) VALUES (?, ?, 'compaction', ?)",
-                    (
-                        generate_part_id(),
-                        compact_msg_id,
-                        json.dumps(
-                            {
-                                "auto": True,
-                                "overflow": True,
-                                "summary": summary,
-                                "compressed_count": len(old_msg_list),
-                                "token_saving": current_tokens - new_tokens,
-                            }
-                        ),
-                    ),
-                )
-                conn.commit()
-
-        except Exception as e:
-            logger.error(f"Error compacting session {session_id}: {e}")
+    # ─── Compaction V2 위임 (구현은 services/memory_optimizer.py) ───
 
     async def compact(self, session_id: str, compressor: Any) -> None:
-        await asyncio.to_thread(self._compact_sync, session_id, compressor)
+        """세션 메모리 최적화를 MemoryOptimizer 에 위임한다."""
+        await asyncio.to_thread(
+            self._optimizer.optimize_sync, session_id, compressor
+        )
 
     # ─── 세션 포크 ───
 
@@ -681,6 +571,12 @@ class SessionManager(ISessionManager):
                         "SELECT rowid FROM messages WHERE id = ? AND session_id = ?",
                         (fork_point_message_id, source_session_id),
                     ).fetchone()
+                    if fork_msg is None:  # 잘못된/다른 세션의 fork point → 명확한 에러(R15)
+                        err = (
+                            f"Fork point '{fork_point_message_id}' not found in "
+                            f"session '{source_session_id}'"
+                        )
+                        raise ValueError(err)
                     source_msgs = conn.execute(
                         "SELECT * FROM messages WHERE session_id = ? AND rowid <= ? ORDER BY rowid ASC",
                         (source_session_id, fork_msg["rowid"]),

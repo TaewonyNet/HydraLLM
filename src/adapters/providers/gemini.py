@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Any
 
@@ -6,18 +7,18 @@ import google.generativeai as genai
 from src.core.exceptions import RateLimitError, ServiceUnavailableError
 from src.core.logging import get_logger
 from src.domain.enums import ModelType
-from src.domain.interfaces import ILLMProvider
+from src.domain.interfaces import IContextManager, ILLMProvider
 from src.domain.models import ChatMessage, ChatMessageChoice, ChatRequest, ChatResponse
-from src.services.context_manager import ContextManager
 
 logger = get_logger(__name__)
 
 
 class GeminiAdapter(ILLMProvider):
-    def __init__(self, api_key: str, context_manager: ContextManager | None = None):
+    def __init__(self, api_key: str, context_manager: IContextManager | None = None):
         genai.configure(api_key=api_key)
         self._discovered_models: list[dict[str, Any]] = []
         self.context_manager = context_manager
+        self._discover_lock = asyncio.Lock()  # 첫 요청들의 중복 discover 방지
         logger.info("GeminiAdapter initialized")
 
     def get_supported_models(self) -> list[ModelType]:
@@ -39,10 +40,15 @@ class GeminiAdapter(ILLMProvider):
     async def generate(self, request: ChatRequest, api_key: str) -> ChatResponse:
         uploaded_files: list[Any] = []
         try:
+            # 주의(R9, 알려진 한계): google.generativeai 의 configure 는 '모듈 전역' 키를
+            # 설정한다. 서로 다른 키의 동시 요청이 이 전역을 덮어쓰면 키가 뒤섞일 수 있다.
+            # 근본 해결은 client-instance API(google-genai) 이관이며 별도 과제로 추적한다.
             genai.configure(api_key=api_key)
 
             if not self._discovered_models:
-                await self.discover_models()
+                async with self._discover_lock:
+                    if not self._discovered_models:
+                        await self.discover_models()
 
             if not request.messages:
                 err_msg = "No messages provided in request"
@@ -72,7 +78,9 @@ class GeminiAdapter(ILLMProvider):
                             tmp_path = self.context_manager.prepare_temp_file(
                                 content_str
                             )
-                            file_handle = genai.upload_file(
+                            # 동기 블로킹 SDK 호출은 스레드에서 실행(이벤트루프 보호, R8).
+                            file_handle = await asyncio.to_thread(
+                                genai.upload_file,
                                 path=tmp_path,
                                 display_name=f"ctx_{content_hash[:8]}.txt",
                             )
@@ -304,7 +312,9 @@ class GeminiAdapter(ILLMProvider):
     async def discover_models(self) -> list[dict[str, Any]]:
         try:
             models = []
-            for m in genai.list_models():
+            # genai.list_models() 는 동기 블로킹이므로 스레드에서 수집(R8).
+            discovered = await asyncio.to_thread(lambda: list(genai.list_models()))
+            for m in discovered:
                 if "generateContent" in m.supported_generation_methods:
                     name = m.name.replace("models/", "")
                     m_info = {
@@ -323,6 +333,52 @@ class GeminiAdapter(ILLMProvider):
         except Exception as e:
             logger.error(f"Failed to discover Gemini models: {e}")
             return []
+
+    # 무료/프리미엄 모델 우선순위(앞쪽 우선). 첫 사용 가능(200/429) 모델을 채택한다.
+    _FREE_MODEL_PRIORITY = (
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-flash-latest",
+        "gemini-1.5-flash",
+    )
+    _PREMIUM_MODEL_PRIORITY = (
+        "gemini-2.5-pro",
+        "gemini-pro-latest",
+        "gemini-1.5-pro",
+    )
+
+    async def find_working_model(self, api_key: str, tier: str = "free") -> str | None:
+        """우선순위 후보를 경량 probe(max_output_tokens=1)해 사용 가능한 첫 모델 반환.
+
+        200(정상)·429(권한 OK·쿼터 소진)는 채택, 403/404(권한 없음·미존재)는 스킵한다.
+        discover_models 로 발견된 목록과 교집합만 시도해 불필요한 404 probe 를 줄인다.
+        후보를 우선순위대로 돌며 첫 성공에서 즉시 중단해 무료 쿼터 소모를 최소화한다.
+        """
+        genai.configure(api_key=api_key)
+        priority = (
+            self._FREE_MODEL_PRIORITY if tier == "free" else self._PREMIUM_MODEL_PRIORITY
+        )
+        discovered = {m["id"] for m in (getattr(self, "_discovered_models", None) or [])}
+        candidates = [m for m in priority if not discovered or m in discovered]
+        for model_name in candidates:
+            try:
+                model = genai.GenerativeModel(model_name)
+                await model.generate_content_async(
+                    "hi", generation_config={"max_output_tokens": 1}
+                )
+                logger.info("사용 가능 모델 확인: %s (tier=%s)", model_name, tier)
+                return model_name
+            except Exception as e:
+                err = str(e).lower()
+                if "429" in err or "resource_exhausted" in err or "quota" in err:
+                    logger.info("모델 %s 권한 OK·쿼터 소진(429) → 채택", model_name)
+                    return model_name
+                if any(s in err for s in ("403", "permission", "404", "not found")):
+                    logger.info("모델 %s 사용 불가 → 스킵", model_name)
+                    continue
+                logger.warning("모델 %s probe 오류 → 스킵: %s", model_name, str(e)[:60])
+                continue
+        return None
 
     async def probe_key(self, api_key: str) -> dict[str, Any]:
         try:

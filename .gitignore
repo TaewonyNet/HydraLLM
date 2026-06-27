@@ -19,8 +19,6 @@
 .python-version
 .venv
 .vscode/
-AGENTS.ko.md
-AGENTS.md
 ENV/
 Thumbs.db
 __pycache__/
@@ -40,7 +38,14 @@ startup_error_debug.log
 test_out.log
 /gateway_sessions.sqlite
 /gateway.log
-/CLAUDE.md
-/AGENTS.md
-/AGENTS.ko.md
+# AI 코딩 어시스턴트 문서/설정 (Claude Code · 에이전트) — 로컬 전용, 추적 안 함.
+# 하위 디렉터리의 per-layer 파일까지 무시하도록 unanchored 패턴 사용.
+CLAUDE.md
+AGENTS.md
+AGENTS.ko.md
+.claude/
+.cursorrules
+.cursor/
+.github/copilot-instructions.md
+
 /.archive/

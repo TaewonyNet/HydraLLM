@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import Any
 
@@ -9,12 +8,9 @@ logger = logging.getLogger(__name__)
 
 class MetricsService:
     def __init__(self, session_manager: ISessionManager):
+        # 집계 통계는 SQLite(usage/daily_usage)가 단일 진실원이며 get_summary 가 거기서
+        # 읽는다. 과거 인메모리 카운터는 쓰기만 하고 아무도 읽지 않는 dead 상태여서 제거했다.
         self.session_manager = session_manager
-        self._lock = asyncio.Lock()
-        self._total_requests = 0
-        self._total_tokens = 0
-        self._error_count = 0
-        self._provider_stats: dict[str, dict[str, int]] = {}
 
     async def record_request(
         self,
@@ -27,26 +23,7 @@ class MetricsService:
         status: str = "success",
         endpoint: str = "chat",
     ) -> None:
-        async with self._lock:
-            self._total_requests += 1
-            tokens = prompt_tokens + completion_tokens
-            self._total_tokens += tokens
-
-            if "error" in status.lower():
-                self._error_count += 1
-
-            if provider not in self._provider_stats:
-                self._provider_stats[provider] = {
-                    "tokens": 0,
-                    "requests": 0,
-                    "errors": 0,
-                }
-
-            self._provider_stats[provider]["tokens"] += tokens
-            self._provider_stats[provider]["requests"] += 1
-            if "error" in status.lower():
-                self._provider_stats[provider]["errors"] += 1
-
+        tokens = prompt_tokens + completion_tokens
         is_error = "error" in status.lower()
 
         await self.session_manager.record_usage(

@@ -43,9 +43,22 @@ async def get_keyword_store(request: Request) -> KeywordStore:
 async def verify_admin_auth(
     api_key: str | None = Security(_admin_key_header),
 ) -> bool:
-    """Admin 엔드포인트 접근 권한 검증."""
+    """Admin 엔드포인트 접근 권한 검증.
+
+    ADMIN_API_KEY 미설정 시: --debug(또는 DEBUG=true) 로컬 개발에서만 개방하고,
+    그 외(운영 추정)에는 fail-closed 로 차단한다. host 가 0.0.0.0 으로 바인드되므로
+    키 없이 개방하면 LAN 에 admin 표면(키 주입·설치·세션)이 노출되기 때문이다.
+    """
     if settings.admin_api_key is None:
-        return True
+        if settings.debug:
+            return True
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Admin API is disabled: set ADMIN_API_KEY to enable admin endpoints, "
+                "or run with --debug for local development."
+            ),
+        )
     if not api_key or api_key != settings.admin_api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

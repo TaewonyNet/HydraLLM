@@ -116,19 +116,20 @@ class OpenAICompatAdapter(ILLMProvider):
                 logger.info(f"Enabling Web Search tool for model {model}")
 
             # Make the API call
-            async with httpx.AsyncClient(timeout=60) as http_client:
-                self.client.http_client = http_client
-                response = await self.client.chat.completions.create(
-                    model=model,
-                    messages=messages,  # type: ignore
-                    tools=tools,  # type: ignore
-                    temperature=request.temperature,
-                    max_tokens=request.max_tokens,
-                    top_p=request.top_p,
-                    frequency_penalty=request.frequency_penalty,
-                    presence_penalty=request.presence_penalty,
-                    stop=request.stop,
-                )
+            # __init__ 의 단일 클라이언트를 재사용한다. 매 요청 새 httpx 클라이언트를
+            # self.client.http_client 에 재대입하면 동시 요청이 서로의 클라이언트를 닫힌
+            # 인스턴스로 교체하는 race + 원본 클라이언트 누수가 발생한다(R2).
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,  # type: ignore
+                tools=tools,  # type: ignore
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                top_p=request.top_p,
+                frequency_penalty=request.frequency_penalty,
+                presence_penalty=request.presence_penalty,
+                stop=request.stop,
+            )
             logger.info(f"Request succeeded with model {model}")
             # Convert to our standardized response format
             return self._convert_to_chat_response(response)

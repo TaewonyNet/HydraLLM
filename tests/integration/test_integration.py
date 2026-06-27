@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 # Import app from main.py directly
 import main
-from src.api.v1.dependencies import get_gateway
+from src.api.v1.dependencies import get_gateway, verify_admin_auth
 from src.domain.models import ChatChoice, ChatMessage, ChatRequest, ChatResponse
 from src.services.gateway import Gateway
 
@@ -45,6 +45,8 @@ class TestIntegration:
 
         # Override dependency
         main.app.dependency_overrides[get_gateway] = lambda: self.mock_gateway
+        # admin 인증은 ADMIN_API_KEY 미설정+non-debug 시 fail-closed 이므로 우회.
+        main.app.dependency_overrides[verify_admin_auth] = lambda: True
 
     def teardown_method(self):
         main.app.dependency_overrides.clear()

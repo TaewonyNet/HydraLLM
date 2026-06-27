@@ -23,6 +23,8 @@ class ContextAnalyzer(IContextAnalyzer):
         self._provider_priority = self._parse_config_list(settings.provider_priority)
         # gateway 등 외부에서 read-only 로 참조할 수 있도록 공용 속성도 노출.
         self.provider_priority: list[str] = list(self._provider_priority)
+        # fast tier(Groq/Cerebras) 라운드로빈 분산용 카운터.
+        self._fast_rr = 0
 
         self._model_mapping: dict[str, ModelType | str] = {
             "mllm/auto": "auto",
@@ -55,6 +57,34 @@ class ContextAnalyzer(IContextAnalyzer):
             ProviderType.CEREBRAS: 0.00001,
         }
 
+    def set_default_free_model(self, model: str) -> None:
+        """startup 모델 탐색이 사용 가능 모델을 찾으면 기본 무료 모델을 동적 교체한다."""
+        self._default_free_model = model
+
+    def set_default_premium_model(self, model: str) -> None:
+        """startup 모델 탐색 결과로 기본 프리미엄 모델을 동적 교체한다."""
+        self._default_premium_model = model
+
+    def _pick_fast_provider(
+        self, available_tiers: dict[ProviderType, set[str]] | None
+    ) -> ProviderType | None:
+        """가용한 fast tier(Groq/Cerebras)를 라운드로빈으로 선택한다(단독 쏠림 방지).
+
+        provider_priority 에 포함되고 활성 키가 있는 공급자만 후보. 후보가 없으면 None.
+        """
+        candidates = [
+            p
+            for p in (ProviderType.GROQ, ProviderType.CEREBRAS)
+            if p.value in self._provider_priority
+            and available_tiers
+            and available_tiers.get(p)
+        ]
+        if not candidates:
+            return None
+        chosen = candidates[self._fast_rr % len(candidates)]
+        self._fast_rr += 1
+        return chosen
+
     def _parse_config_list(self, value: list[str] | str | None) -> list[str]:
         if not value:
             return []
@@ -62,7 +92,35 @@ class ContextAnalyzer(IContextAnalyzer):
             return [m.strip() for m in value.split(",") if m.strip()]
         return value
 
+    def _is_strict_hint(self, model: str | None) -> bool:
+        """원본 모델 힌트가 명시적 provider/agent 지정(strict)인지 판정한다.
+
+        '/' 가 있고 local-agent 이거나 알려진 provider/agent 명을 포함하면 strict.
+        순수 'auto'/'default'/별칭('gpt-4o')은 False(교차 폴백 허용).
+        gateway 가 request.model 을 덮어쓰기 *전*의 원본을 보고 판정해야 하므로
+        analyze() 래퍼에서 호출한다.
+        """
+        hint = (model or "").lower()
+        if "/" not in hint:
+            return False
+        if hint.startswith("local-agent/"):
+            return True
+        return any(p.value in hint for p in ProviderType) or any(
+            a.value in hint for a in AgentType
+        )
+
     async def analyze(
+        self,
+        request: ChatRequest,
+        available_tiers: dict[ProviderType, set[str]] | None = None,
+    ) -> RoutingDecision:
+        # strict 여부는 '결정의 속성'으로 한 곳에서 판정해 decision 에 싣는다(원본 힌트 기준).
+        # resilience 가 덮어쓰인 request.model 을 재파싱하지 않도록 한다(구조 결함 S1 해소).
+        decision = await self._analyze_inner(request, available_tiers)
+        decision.strict = self._is_strict_hint(request.model)
+        return decision
+
+    async def _analyze_inner(
         self,
         request: ChatRequest,
         available_tiers: dict[ProviderType, set[str]] | None = None,
@@ -90,11 +148,15 @@ class ContextAnalyzer(IContextAnalyzer):
         if "/" in model_hint:
             parts = model_hint.split("/", 1)
             p_name = parts[0]
-            
+
             if p_name in [p.value for p in ProviderType]:
                 preferred_provider = ProviderType(p_name)
                 requested_model = parts[1]
-                
+                # "PROVIDER/auto" 는 해당 공급자 내 auto 라우팅이다. 'auto'/'default' 를
+                # 실제 모델명으로 오인해 explicit 경로로 빠지지 않도록 sentinel 을 비운다.
+                if requested_model in ("auto", "default"):
+                    requested_model = None
+
             elif p_name in [a.value for a in AgentType]:
                 return RoutingDecision(
                     provider=None,
@@ -125,19 +187,17 @@ class ContextAnalyzer(IContextAnalyzer):
                 result_decision.agent = target
             return result_decision
         if model_hint in ["mllm/auto", "auto", "default"]:
-            if estimated_tokens > 7000:
+            # 멀티모달(이미지)만 fast tier 보다 우선 — Gemini Vision. 웹 의도는 더 이상
+            # Gemini 를 강제하지 않는다: 웹 컨텍스트는 프롬프트에 주입(≤6000자)되므로
+            # fast tier(Groq/Cerebras)도 충분히 처리한다 → Gemini 쏠림 완화.
+            if has_images:
                 preferred_provider = ProviderType.GEMINI
-            elif not preferred_provider and available_tiers:
-                if (
-                    ProviderType.GROQ in available_tiers
-                    and available_tiers[ProviderType.GROQ]
-                ):
-                    preferred_provider = ProviderType.GROQ
-                elif (
-                    ProviderType.CEREBRAS in available_tiers
-                    and available_tiers[ProviderType.CEREBRAS]
-                ):
-                    preferred_provider = ProviderType.CEREBRAS
+            # 토큰 임계값 이상(주입 포함 X, 사용자+히스토리 기준)이면 대용량 Gemini 로.
+            elif estimated_tokens >= self._max_tokens_fast_model:
+                preferred_provider = ProviderType.GEMINI
+            elif not preferred_provider:
+                # fast tier 를 라운드로빈으로 분산(Groq↔Cerebras 단독 쏠림 방지).
+                preferred_provider = self._pick_fast_provider(available_tiers)
 
         # 명시적 provider hint 추론 (예: "gemini-pro", "groq-llama-3.3-70b").
         # 모델 매핑에 없고 `/` prefix 도 없지만 provider 키워드가 포함된 경우 preferred_provider 설정.
@@ -316,17 +376,8 @@ class ContextAnalyzer(IContextAnalyzer):
                 "reason": RoutingReason.IMAGE_PRESENT.value,
             }
 
-        if web_required:
-            has_premium_gemini = available_tiers and "premium" in available_tiers.get(
-                ProviderType.GEMINI, set()
-            )
-            return {
-                "provider": ProviderType.GEMINI,
-                "model": self._default_premium_model
-                if has_premium_gemini
-                else self._default_free_model,
-                "reason": "WEB_INTENT_REQUIRE_INTELLIGENCE",
-            }
+        # 웹 의도(web_required)는 더 이상 Gemini 를 강제하지 않는다. 웹 컨텍스트는
+        # 프롬프트에 주입(≤6000자)되므로 fast tier 도 처리 가능 → 아래 토큰 기반 라우팅을 따른다.
 
         preferred_external = [
             p for p in self._provider_priority if p in ["gemini", "groq", "cerebras"]
@@ -334,25 +385,20 @@ class ContextAnalyzer(IContextAnalyzer):
         fast_threshold = self._max_tokens_fast_model
 
         if estimated_tokens < fast_threshold:
-            if "groq" in self._provider_priority:
-                has_groq = available_tiers and available_tiers.get(ProviderType.GROQ)
-                if has_groq:
-                    return {
-                        "provider": ProviderType.GROQ,
-                        "model": ModelType.GROQ_LLAMA_3_3_70B,
-                        "reason": RoutingReason.TOKEN_COUNT.value,
-                    }
-
-            if "cerebras" in self._provider_priority:
-                has_cerebras = available_tiers and available_tiers.get(
-                    ProviderType.CEREBRAS
-                )
-                if has_cerebras:
-                    return {
-                        "provider": ProviderType.CEREBRAS,
-                        "model": ModelType.CEREBRAS_LLAMA,
-                        "reason": RoutingReason.TOKEN_COUNT.value,
-                    }
+            # Groq↔Cerebras 라운드로빈으로 fast tier 부하를 분산한다(단독 쏠림 방지).
+            fast = self._pick_fast_provider(available_tiers)
+            if fast == ProviderType.GROQ:
+                return {
+                    "provider": ProviderType.GROQ,
+                    "model": ModelType.GROQ_LLAMA_3_3_70B,
+                    "reason": RoutingReason.TOKEN_COUNT.value,
+                }
+            if fast == ProviderType.CEREBRAS:
+                return {
+                    "provider": ProviderType.CEREBRAS,
+                    "model": ModelType.CEREBRAS_LLAMA,
+                    "reason": RoutingReason.TOKEN_COUNT.value,
+                }
 
             for p_name in preferred_external:
                 p_type = ProviderType(p_name)
@@ -430,12 +476,15 @@ class ContextAnalyzer(IContextAnalyzer):
         work_id = model_id.lower()
         if work_id.startswith("local-agent/"):
             work_id = work_id.replace("local-agent/", "", 1)
-        
+
         if "/" in work_id:
             prefix = work_id.split("/")[0]
-            if prefix == "ollama": return AgentType.OLLAMA
-            if prefix == "opencode": return AgentType.OPENCODE
-            if prefix == "openclaw": return AgentType.OPENCLAW
+            if prefix == "ollama":
+                return AgentType.OLLAMA
+            if prefix == "opencode":
+                return AgentType.OPENCODE
+            if prefix == "openclaw":
+                return AgentType.OPENCLAW
 
         # 2. Check dynamically registered models (from discover_models)
         if hasattr(self, "_dynamic_targets"):
@@ -460,15 +509,21 @@ class ContextAnalyzer(IContextAnalyzer):
                 return prefix_map[prefix]
 
         # 4. Pattern-based routing
+        # provider 키워드(cerebras/groq)를 일반 family 명(llama/deepseek)보다 먼저 검사한다.
+        # 그렇지 않으면 "cerebras-llama-..." 같은 식별자가 llama 매칭에 걸려 Groq 로
+        # 오라우팅된다(SPEC §5 disambiguation).
         model_lower = model_id.lower()
         if "gemini" in model_lower:
             return ProviderType.GEMINI
-        if "groq" in model_lower or "llama" in model_lower or "deepseek" in model_lower:
-            if "ollama" in model_lower:
-                return AgentType.OLLAMA
-            return ProviderType.GROQ
+        # "ollama" 는 "llama" 부분문자열을 포함하므로 family 검사보다 먼저 처리.
+        if "ollama" in model_lower:
+            return AgentType.OLLAMA
         if "cerebras" in model_lower:
             return ProviderType.CEREBRAS
+        if "groq" in model_lower:
+            return ProviderType.GROQ
+        if "llama" in model_lower or "deepseek" in model_lower:
+            return ProviderType.GROQ
         if (
             "ollama" in model_lower
             or "gemma" in model_lower

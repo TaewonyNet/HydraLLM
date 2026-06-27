@@ -261,6 +261,27 @@
 
     <script>
         let availableModels = [];
+        // XSS 방어: innerHTML 보간 전 서버/외부 유래 문자열을 HTML 이스케이프.
+        function esc(s) {
+            if (s === null || s === undefined) return '';
+            return String(s).replace(/[&<>"']/g, c => (
+                {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+            ));
+        }
+        // 관리자 인증: ADMIN_API_KEY 설정 시 /v1/admin/* 호출에 X-Admin-Key 헤더 첨부.
+        let adminKeyPrompted = false;
+        function adminFetch(url, opts = {}) {
+            const k = localStorage.getItem('hydra_admin_key');
+            if (k) opts.headers = Object.assign({}, opts.headers, { 'X-Admin-Key': k });
+            return fetch(url, opts).then(res => {
+                if ((res.status === 401 || res.status === 503) && !k && !adminKeyPrompted) {
+                    adminKeyPrompted = true;
+                    const nk = prompt('관리자 키(X-Admin-Key)를 입력하세요. 서버에 ADMIN_API_KEY 설정 시 필요합니다.');
+                    if (nk) { localStorage.setItem('hydra_admin_key', nk); location.reload(); }
+                }
+                return res;
+            });
+        }
         let currentSessionId = localStorage.getItem('hydra_session_id');
         let usageChart = null;
         let i18nCache = {};
@@ -312,7 +333,7 @@
             currentLang = lang;
             localStorage.setItem('hydra_lang', lang);
             try {
-                await fetch('/v1/admin/settings', {
+                await adminFetch('/v1/admin/settings', {
                     method: 'PUT', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ locale: lang })
                 });
@@ -356,7 +377,7 @@
 
         async function loadDashboard() {
             try {
-                const res = await fetch('http://localhost:8000/v1/admin/dashboard');
+                const res = await adminFetch('http://localhost:8000/v1/admin/dashboard');
                 const data = await res.json();
                 document.getElementById('stat-tokens').textContent = (data.total_tokens || 0).toLocaleString();
                 document.getElementById('stat-requests').textContent = (data.total_requests || 0).toLocaleString();
@@ -439,7 +460,7 @@
         async function refreshSidebarStatus() {
             const content = document.getElementById('sidebar-content');
             try {
-                const res = await fetch('http://localhost:8000/v1/admin/status');
+                const res = await adminFetch('http://localhost:8000/v1/admin/status');
                 const data = await res.json();
                 // gateway.get_status() 는 최상위에 providers 를 둔다 (data.status 는 문자열).
                 const providers = data.providers || {};
@@ -529,9 +550,9 @@
                             const statusColor = d.status === 'success' ? '#28a745' : (d.status === 'cache_hit' ? '#17a2b8' : '#dc3545');
                             const shortLabel = label.length > 50 ? label.substring(0, 47) + '...' : label;
                             
-                            html += `<a href="${d.url || '#'}" target="_blank" class="badge" style="background:white; border:1px solid ${statusColor}; color:${statusColor}; padding:4px 8px; text-decoration:none; display:flex; align-items:center; gap:4px;" title="${label}">
+                            html += `<a href="${esc(d.url || '#')}" target="_blank" class="badge" style="background:white; border:1px solid ${statusColor}; color:${statusColor}; padding:4px 8px; text-decoration:none; display:flex; align-items:center; gap:4px;" title="${esc(label)}">
                                 <span style="width:6px; height:6px; border-radius:50%; background:${statusColor};"></span>
-                                ${shortLabel}
+                                ${esc(shortLabel)}
                             </a>`;
                         });
                         
@@ -590,7 +611,7 @@
         }
 
         async function createNewSession() {
-            const res = await fetch('http://localhost:8000/v1/admin/sessions/new', { method: 'POST' });
+            const res = await adminFetch('http://localhost:8000/v1/admin/sessions/new', { method: 'POST' });
             const data = await res.json();
             currentSessionId = data.session_id; localStorage.setItem('hydra_session_id', currentSessionId);
             document.getElementById('chat-history').innerHTML = '';
@@ -601,10 +622,10 @@
 
         async function loadSessions() {
             try {
-                const res = await fetch('http://localhost:8000/v1/admin/sessions');
+                const res = await adminFetch('http://localhost:8000/v1/admin/sessions');
                 const data = await res.json();
                 const list = document.getElementById('session-list');
-                list.innerHTML = data.map(s => `<div onclick="switchSession('${s.session_id}')" class="session-item ${s.session_id===currentSessionId?'active':''}"><strong>${s.title||'Conversation'}</strong><br><small>${new Date(s.updated_at).toLocaleString()}</small></div>`).join('');
+                list.innerHTML = data.map(s => `<div onclick="switchSession('${s.session_id}')" class="session-item ${s.session_id===currentSessionId?'active':''}"><strong>${esc(s.title||'Conversation')}</strong><br><small>${new Date(s.updated_at).toLocaleString()}</small></div>`).join('');
                 if (currentSessionId) document.getElementById('current-session-display').textContent = 'SID: ' + currentSessionId.substring(0,10);
             } catch (e) {}
         }
@@ -621,7 +642,7 @@
 
         async function restoreSessionMessages(sid) {
             try {
-                const res = await fetch(`/v1/admin/sessions/${sid}/messages`);
+                const res = await adminFetch(`/v1/admin/sessions/${sid}/messages`);
                 if (!res.ok) return;
                 const messages = await res.json();
                 if (!Array.isArray(messages)) return;
@@ -644,7 +665,7 @@
             const sid = (input && input.value || '').trim();
             if (!sid) { showBottomModal('세션 ID를 입력하세요.'); return; }
             try {
-                const res = await fetch('/v1/admin/sessions/import', {
+                const res = await adminFetch('/v1/admin/sessions/import', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ session_id: sid })
@@ -665,7 +686,7 @@
         async function clearSystemLogs() {
             if (!confirm(t('logs.confirm_clear') || '모든 시스템 로그를 초기화하시겠습니까?')) return;
             try {
-                await fetch('/v1/admin/logs/clear', { method: 'POST' });
+                await adminFetch('/v1/admin/logs/clear', { method: 'POST' });
                 loadLogs();
                 showBottomModal(t('logs.cleared') || '시스템 로그가 초기화되었습니다.');
             } catch (e) {
@@ -675,37 +696,37 @@
 
         async function loadLogs() {
             try {
-                const res = await fetch('http://localhost:8000/v1/admin/logs?limit=50');
+                const res = await adminFetch('http://localhost:8000/v1/admin/logs?limit=50');
                 const data = await res.json();
                 const tbody = document.querySelector('#logs-table tbody');
                 if (!data || data.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px; color:#888;">기록된 로그가 없습니다.</td></tr>';
                 } else {
-                    tbody.innerHTML = data.map(l => `<tr><td>${new Date(l.created_at).toLocaleTimeString()}</td><td><span class="badge badge-${l.level.toLowerCase()==='error'?'danger':(l.level.toLowerCase()==='warning'?'warning':'info')}">${l.level}</span></td><td>${l.category}</td><td>${l.message}</td><td style="font-family:monospace; font-size:0.65rem; color:#888;">${l.metadata}</td></tr>`).join('');
+                    tbody.innerHTML = data.map(l => `<tr><td>${new Date(l.created_at).toLocaleTimeString()}</td><td><span class="badge badge-${l.level.toLowerCase()==='error'?'danger':(l.level.toLowerCase()==='warning'?'warning':'info')}">${esc(l.level)}</span></td><td>${esc(l.category)}</td><td>${esc(l.message)}</td><td style="font-family:monospace; font-size:0.65rem; color:#888;">${esc(l.metadata)}</td></tr>`).join('');
                 }
             } catch (e) { console.error('Log load failed:', e); }
         }
 
-        async function probeKeys() { await fetch('http://localhost:8000/v1/admin/probe', { method: 'POST' }); showBottomModal('재검증 작업이 시작되었습니다.'); refreshSidebarStatus(); }
+        async function probeKeys() { await adminFetch('http://localhost:8000/v1/admin/probe', { method: 'POST' }); showBottomModal('재검증 작업이 시작되었습니다.'); refreshSidebarStatus(); }
 
         async function addKeys() {
             const p = document.getElementById('key-provider').value; const k = document.getElementById('new-key-input').value;
             if (!k) return;
-            await fetch(`http://localhost:8000/v1/admin/keys?provider=${p}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(k.split(',').map(s=>s.trim())) });
+            await adminFetch(`http://localhost:8000/v1/admin/keys?provider=${p}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(k.split(',').map(s=>s.trim())) });
             showBottomModal('키가 추가되었습니다.'); document.getElementById('new-key-input').value = ''; refreshSidebarStatus();
         }
 
-        async function refreshModelDiscovery() { await fetch('http://localhost:8000/v1/admin/refresh-models', { method: 'POST' }); showBottomModal('모델 정보 동기화 완료'); loadModels(); }
+        async function refreshModelDiscovery() { await adminFetch('http://localhost:8000/v1/admin/refresh-models', { method: 'POST' }); showBottomModal('모델 정보 동기화 완료'); loadModels(); }
 
         async function deleteCurrentSession() {
             if (!confirm(t('chat.confirm_delete'))) return;
-            await fetch(`http://localhost:8000/v1/admin/sessions/${currentSessionId}`, { method: 'DELETE' });
+            await adminFetch(`http://localhost:8000/v1/admin/sessions/${currentSessionId}`, { method: 'DELETE' });
             localStorage.removeItem('hydra_session_id'); createNewSession();
         }
 
         async function checkOnboarding() {
             try {
-                const res = await fetch('http://localhost:8000/v1/admin/onboarding');
+                const res = await adminFetch('http://localhost:8000/v1/admin/onboarding');
                 const data = await res.json();
                 const overlay = document.getElementById('onboarding-overlay');
                 if (data.completed) { overlay.classList.remove('active'); overlay.style.display = 'none'; return; }
@@ -721,14 +742,14 @@
 
         async function saveOnboarding() {
             const enabled = Array.from(document.querySelectorAll('input[name="model-select"]:checked')).map(i => i.value);
-            await fetch('/v1/admin/onboarding', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ enabled_models: enabled }) });
+            await adminFetch('/v1/admin/onboarding', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ enabled_models: enabled }) });
             const overlay = document.getElementById('onboarding-overlay'); overlay.classList.remove('active'); setTimeout(() => overlay.style.display = 'none', 500);
             showBottomModal(t('settings.settings_saved')); loadModels();
         }
 
         async function loadGeneralSettings() {
             try {
-                const res = await fetch('/v1/admin/settings');
+                const res = await adminFetch('/v1/admin/settings');
                 const data = await res.json();
                 if (data.locale) {
                     document.getElementById('settings-lang-select').value = data.locale;
@@ -738,7 +759,7 @@
                 document.getElementById('settings-debug-label').textContent = debug ? 'on' : 'off';
             } catch (e) { console.error('settings load failed', e); }
             try {
-                const res2 = await fetch('/v1/admin/install/status');
+                const res2 = await adminFetch('/v1/admin/install/status');
                 const data2 = await res2.json();
                 const container = document.getElementById('installer-status');
                 container.innerHTML = Object.entries(data2).map(([name, s]) => {
@@ -753,7 +774,7 @@
             const locale = document.getElementById('settings-lang-select').value;
             const debug = document.getElementById('settings-debug-check').checked;
             try {
-                await fetch('/v1/admin/settings', {
+                await adminFetch('/v1/admin/settings', {
                     method: 'PUT', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ locale, debug_comm_log: debug })
                 });
@@ -769,7 +790,7 @@
             const log = document.getElementById('installer-log') || document.getElementById('onboarding-install-log');
             if (log) log.textContent = `[${tool}] ${t('settings.installing')}`;
             try {
-                const res = await fetch(`/v1/admin/install/${tool}`, { method: 'POST' });
+                const res = await adminFetch(`/v1/admin/install/${tool}`, { method: 'POST' });
                 const data = await res.json();
                 const msg = data.success ? t('settings.install_success') : t('settings.install_failed');
                 if (log) log.textContent = `[${tool}] ${msg}\n${data.message || ''}`;
@@ -786,7 +807,7 @@
         async function loadCommLogs() {
             const container = document.getElementById('comm-log-table');
             try {
-                const res = await fetch('/v1/admin/comm-logs?limit=200');
+                const res = await adminFetch('/v1/admin/comm-logs?limit=200');
                 const data = await res.json();
                 if (!data.enabled) {
                     container.innerHTML = `<div style="padding:15px; color:#888;">${t('settings.comm_log_disabled')}</div>`;
@@ -799,20 +820,20 @@
                 container.innerHTML = data.entries.slice().reverse().map(e => {
                     const ts = new Date(e.ts * 1000).toLocaleTimeString();
                     const color = e.direction === 'request' ? '#1565c0' : '#155724';
-                    return `<div style="border-bottom:1px dashed #ddd; padding:6px 4px;"><span style="color:${color}; font-weight:bold;">[${e.direction}]</span> <span style="color:#666;">${ts}</span> <strong>${e.provider}</strong><pre style="margin:4px 0 0 0; white-space:pre-wrap; font-size:0.7rem;">${JSON.stringify(e.payload, null, 2)}</pre></div>`;
+                    return `<div style="border-bottom:1px dashed #ddd; padding:6px 4px;"><span style="color:${color}; font-weight:bold;">[${esc(e.direction)}]</span> <span style="color:#666;">${ts}</span> <strong>${esc(e.provider)}</strong><pre style="margin:4px 0 0 0; white-space:pre-wrap; font-size:0.7rem;">${esc(JSON.stringify(e.payload, null, 2))}</pre></div>`;
                 }).join('');
-            } catch (e) { container.innerHTML = `<div style="color:red;">${e.message}</div>`; }
+            } catch (e) { container.innerHTML = `<div style="color:red;">${esc(e.message)}</div>`; }
         }
 
         async function clearCommLogs() {
-            await fetch('/v1/admin/comm-logs', { method: 'DELETE' });
+            await adminFetch('/v1/admin/comm-logs', { method: 'DELETE' });
             loadCommLogs();
         }
 
         window.onload = async () => {
             await applyI18n();
             try {
-                const res = await fetch('/v1/admin/settings');
+                const res = await adminFetch('/v1/admin/settings');
                 const s = await res.json();
                 if (s.locale && s.locale !== currentLang) {
                     currentLang = s.locale;

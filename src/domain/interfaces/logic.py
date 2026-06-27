@@ -11,6 +11,38 @@ from ..models import (
 )
 
 
+class IContextManager(ABC):
+    """멀티모달 대용량 컨텍스트의 오프로드/캐싱 계약.
+
+    Gemini 어댑터가 의존하는 추상화. 어댑터는 이 ABC 에만 의존하고
+    구체 구현(services.context_manager.ContextManager)에 직접 결합하지 않는다.
+    """
+
+    @abstractmethod
+    def get_content_hash(self, content: str) -> str:
+        pass
+
+    @abstractmethod
+    def should_offload(self, content: str, threshold: int = 10000) -> bool:
+        pass
+
+    @abstractmethod
+    def prepare_temp_file(self, content: str, suffix: str = ".txt") -> str:
+        pass
+
+    @abstractmethod
+    def get_cached_file(self, content_hash: str) -> Any | None:
+        pass
+
+    @abstractmethod
+    def cache_file(self, content_hash: str, file_handle: Any) -> None:
+        pass
+
+    @abstractmethod
+    def cleanup(self) -> None:
+        pass
+
+
 class ISessionManager(ABC):
     @abstractmethod
     async def create_session(

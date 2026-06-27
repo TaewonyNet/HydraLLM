@@ -13,10 +13,28 @@ logger = logging.getLogger(__name__)
 
 
 class LocalCLIAdapter(ILLMProvider):
+    _SUBPROCESS_TIMEOUT = 120.0  # 로컬 CLI hang 방지(초)
+
     def __init__(self, binary_path: str, agent_type: str):
         self.binary_path = binary_path
         self.agent_type = agent_type
         logger.info(f"LocalCLIAdapter initialized for: {agent_type}")
+
+    async def _communicate(
+        self, process: "asyncio.subprocess.Process"
+    ) -> tuple[bytes, bytes]:
+        """타임아웃·취소 시 자식 프로세스를 kill·wait 해 hang/좀비를 방지한다(R7)."""
+        try:
+            return await asyncio.wait_for(
+                process.communicate(), timeout=self._SUBPROCESS_TIMEOUT
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            try:
+                process.kill()
+                await process.wait()
+            except ProcessLookupError:
+                pass
+            raise
 
     def get_supported_models(self) -> list[ModelType]:
         if self.agent_type == "opencode":
@@ -50,7 +68,7 @@ class LocalCLIAdapter(ILLMProvider):
                 if model_to_use:
                     if "/" in model_to_use:
                         parts = model_to_use.split("/")
-                        
+
                         if len(parts) >= 3 and parts[0].upper() == "LOCAL-AGENT" and parts[1].upper() == "OPENCODE":
                             model_to_use = "/".join(parts[2:])
                         elif len(parts) >= 2 and parts[0].upper() == "OPENCODE":
@@ -63,7 +81,7 @@ class LocalCLIAdapter(ILLMProvider):
                     if model_to_use == "opencode" or not model_to_use:
                         model_to_use = "github-copilot/gpt-4o"
                     model_flag = ["-m", model_to_use]
-                
+
                 cmd = (
                     [self.binary_path, "run"]
                     + model_flag
@@ -76,7 +94,7 @@ class LocalCLIAdapter(ILLMProvider):
                 if model_to_use:
                     if "/" in model_to_use:
                         parts = model_to_use.split("/")
-                        
+
                         if len(parts) >= 3 and parts[0].upper() == "LOCAL-AGENT" and parts[1].upper() == "OPENCLAW":
                             model_to_use = "/".join(parts[2:])
                         elif len(parts) >= 2 and parts[0].upper() == "OPENCLAW":
@@ -85,7 +103,7 @@ class LocalCLIAdapter(ILLMProvider):
                             model_to_use = "/".join(parts[1:])
                         else:
                             model_to_use = request.model
-                    
+
                     if model_to_use == "openclaw" or not model_to_use:
                         model_to_use = "main"
                     model_flag = ["--agent", model_to_use]
@@ -97,13 +115,13 @@ class LocalCLIAdapter(ILLMProvider):
                     prompt,
                     "--json",
                 ]
-                
+
                 if model_flag:
                     cmd.extend(model_flag)
 
                 if request.session_id:
                     cmd.extend(["--session-id", request.session_id])
-                
+
                 if "--agent" not in cmd and not request.session_id:
                     cmd.extend(["--agent", "main"])
             else:
@@ -115,7 +133,7 @@ class LocalCLIAdapter(ILLMProvider):
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await process.communicate()
+            stdout, stderr = await self._communicate(process)
 
             logger.debug(f"CLI Exit Code: {process.returncode}")
             if stdout:
@@ -232,7 +250,7 @@ class LocalCLIAdapter(ILLMProvider):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, _ = await process.communicate()
+                stdout, _ = await self._communicate(process)
                 if process.returncode == 0:
                     for line in stdout.decode().splitlines():
                         line = line.strip()
@@ -264,7 +282,7 @@ class LocalCLIAdapter(ILLMProvider):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, _ = await process.communicate()
+                stdout, _ = await self._communicate(process)
                 if process.returncode == 0:
                     lines = stdout.decode().splitlines()
                     start_parsing = False
@@ -275,11 +293,11 @@ class LocalCLIAdapter(ILLMProvider):
                             continue
                         if not start_parsing:
                             continue
-                        
+
                         if line.startswith("- "):
                             agent_id = line[2:].split()[0]
                             display_name = f"LOCAL-AGENT/OPENCLAW/{agent_id}"
-                            
+
                             models.append(
                                 {
                                     "id": display_name,
@@ -294,7 +312,7 @@ class LocalCLIAdapter(ILLMProvider):
                                     },
                                 }
                             )
-            
+
             if not models:
                 models.append({
                     "id": "main" if self.agent_type == "openclaw" else "default",

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -45,6 +46,10 @@ class SessionOrchestrator:
             parts=extra_parts,
         )
 
-        if self.session_manager.is_overflow(request.session_id):
+        # is_overflow 는 동기 SQLite 조회이므로 이벤트루프를 막지 않도록 스레드에서 실행(N2).
+        overflow = await asyncio.to_thread(
+            self.session_manager.is_overflow, request.session_id
+        )
+        if overflow:
             logger.info(f"Compacting session {request.session_id}")
             await self.session_manager.compact(request.session_id, self.compressor)

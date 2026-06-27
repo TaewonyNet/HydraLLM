@@ -99,6 +99,8 @@ services:
 1. **HTTPS**: 프로덕션 환경에서는 항상 로드 밸런서나 리버스 프록시(Nginx, Traefik 등)에서 SSL(HTTPS)을 적용하세요.
 2. **API 키 관리**: `.env` 파일을 절대 커밋하지 마세요. 프로덕션 키는 Secret Manager(AWS Secrets Manager, K8s Secrets 등)를 사용해 관리하는 것이 좋습니다.
 3. **방화벽**: 8000번 포트(또는 설정된 포트)를 신뢰할 수 있는 클라이언트나 내부 네트워크에만 노출하세요.
+4. **Admin API 보호 (중요)**: 서버는 `0.0.0.0` 에 바인드됩니다. `/v1/admin/*` 라우트는 `ADMIN_API_KEY` 가 설정되면 `X-Admin-Key` 헤더로 검증되며, **키가 미설정이면 `--debug`(또는 `DEBUG=true`) 가 아닌 한 503으로 차단(fail-closed)** 됩니다. 따라서 **프로덕션에서는 반드시 `ADMIN_API_KEY` 를 설정**하세요(미설정 + 비-debug 로 운영하면 admin 기능 전체가 비활성).
+5. **SSRF**: 웹 스크래퍼는 사설/예약 IP(및 IPv4-mapped IPv6·CGNAT)와 리다이렉트 목적지를 차단합니다(best-effort). 신뢰 경계 밖 URL 입력 시 유의.
 
 ---
 

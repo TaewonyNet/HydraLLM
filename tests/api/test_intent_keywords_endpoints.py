@@ -10,7 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
-from src.api.v1.dependencies import get_intent_classifier, get_keyword_store
+from src.api.v1.dependencies import (
+    get_intent_classifier,
+    get_keyword_store,
+    verify_admin_auth,
+)
 from src.services.keyword_store import KeywordStore
 
 pytestmark = pytest.mark.integration
@@ -33,6 +37,9 @@ class TestIntentKeywordsEndpoints:
         main.app.dependency_overrides[get_intent_classifier] = (
             lambda: self.intent_classifier
         )
+        # admin 인증은 ADMIN_API_KEY 미설정+non-debug 시 fail-closed 이므로,
+        # 엔드포인트 계약만 검증하는 이 테스트에서는 인증을 우회시킨다.
+        main.app.dependency_overrides[verify_admin_auth] = lambda: True
 
     def teardown_method(self):
         main.app.dependency_overrides.clear()

@@ -13,6 +13,8 @@ async def test_gateway_auto_model_integration():
     gateway = Gateway()
 
     gateway.key_manager.get_next_key = AsyncMock(return_value="test-groq-key")
+    # 클라우드 키 있음으로 고정 → no-cloud-keys 로컬 폴백(early-exit) 회피.
+    gateway.key_manager.get_available_keys_count = MagicMock(return_value=1)
     gateway.key_manager.get_key_status = MagicMock(
         return_value={
             ProviderType.GROQ: {
@@ -28,6 +30,7 @@ async def test_gateway_auto_model_integration():
     mock_decision.provider = ProviderType.GROQ
     mock_decision.agent = None
     mock_decision.model_name = "llama-3.3-70b-versatile"
+    mock_decision.strict = False  # 비-strict(S1 계약: decision.strict 로 판정)
     gateway.analyzer.analyze = AsyncMock(return_value=mock_decision)
 
     mock_response = MagicMock()
@@ -41,7 +44,7 @@ async def test_gateway_auto_model_integration():
 
     mock_adapter = AsyncMock()
     mock_adapter.generate = AsyncMock(return_value=mock_response)
-    gateway._get_provider_adapter = MagicMock(return_value=mock_adapter)
+    gateway.resilience._get_provider_adapter = MagicMock(return_value=mock_adapter)
 
     request = ChatRequest(
         model="auto",

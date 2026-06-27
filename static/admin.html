@@ -205,6 +205,30 @@
     <script>
         let usageChart = null;
         let lastKeyStatistics = null;
+        let adminKeyPrompted = false;
+
+        // XSS 방지: 신뢰할 수 없는 값(스크랩/로그/세션/에러)을 innerHTML 에 넣기 전 이스케이프.
+        function esc(s) {
+            if (s === null || s === undefined) return '';
+            return String(s).replace(/[&<>"']/g, c => (
+                {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+            ));
+        }
+
+        // admin 인증: 서버가 ADMIN_API_KEY 를 요구(fail-closed)하면 X-Admin-Key 헤더를 보낸다.
+        // 키는 localStorage 에 보관하고, 401/503 이며 키가 없을 때 1회 입력받는다.
+        function adminFetch(url, opts = {}) {
+            const k = localStorage.getItem('hydra_admin_key');
+            if (k) opts.headers = Object.assign({}, opts.headers, { 'X-Admin-Key': k });
+            return fetch(url, opts).then(res => {
+                if ((res.status === 401 || res.status === 503) && !k && !adminKeyPrompted) {
+                    adminKeyPrompted = true;
+                    const nk = prompt('관리자 키(X-Admin-Key)를 입력하세요. 서버에 ADMIN_API_KEY 설정 시 필요합니다.');
+                    if (nk) { localStorage.setItem('hydra_admin_key', nk); location.reload(); }
+                }
+                return res;
+            });
+        }
 
         function showView(viewName) {
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -229,8 +253,8 @@
             try {
                 // 병렬 요청으로 초기화 속도 개선 및 가드 추가
                 const [dashRes, statusRes] = await Promise.all([
-                    fetch('/v1/admin/dashboard').catch(() => null),
-                    fetch('/v1/admin/status').catch(() => null)
+                    adminFetch('/v1/admin/dashboard').catch(() => null),
+                    adminFetch('/v1/admin/status').catch(() => null)
                 ]);
 
                 if (!dashRes || !dashRes.ok) throw new Error("Dashboard API failed");
@@ -273,7 +297,7 @@
                 if (errors.length > 0) {
                     errorContainer.innerHTML = errors.map(e => `
                         <div style="padding:10px; border-left:4px solid var(--danger); background:#fff5f5; margin-bottom:5px; font-size:0.85rem;">
-                            <strong>${e.category}</strong>: ${e.message}
+                            <strong>${esc(e.category)}</strong>: ${esc(e.message)}
                             <div style="color:#888; font-size:0.7rem;">${new Date(e.created_at).toLocaleString()}</div>
                         </div>
                     `).join('');
@@ -283,7 +307,7 @@
             } catch (e) { 
                 console.error("Dashboard load failed", e); 
                 // 일부 영역만이라도 오류 메시지 노출
-                document.getElementById('recent-errors').innerHTML = `<p style="color:var(--danger); text-align:center;">데이터 로드 실패: ${e.message}</p>`;
+                document.getElementById('recent-errors').innerHTML = `<p style="color:var(--danger); text-align:center;">데이터 로드 실패: ${esc(e.message)}</p>`;
             }
         }
 
@@ -296,10 +320,10 @@
             tbody.innerHTML = scrapingData.map(s => `
                 <tr>
                     <td style="white-space:nowrap; font-size:0.75rem;">${new Date(s.created_at).toLocaleTimeString()}</td>
-                    <td style="max-width:400px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${s.url}">
-                        ${s.query ? `<strong>[Search]</strong> ${s.query}` : s.url}
+                    <td style="max-width:400px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.url)}">
+                        ${s.query ? `<strong>[Search]</strong> ${esc(s.query)}` : esc(s.url)}
                     </td>
-                    <td><span class="badge badge-${s.status === 'success' || s.status === 'cache_hit' ? 'success' : 'danger'}">${s.status}</span></td>
+                    <td><span class="badge badge-${s.status === 'success' || s.status === 'cache_hit' ? 'success' : 'danger'}">${esc(s.status)}</span></td>
                     <td>${(s.chars_count || 0).toLocaleString()}자</td>
                     <td>${s.latency_ms || 0}ms</td>
                 </tr>
@@ -311,11 +335,27 @@
             if (!healthData) return;
             grid.innerHTML = healthData.map(h => {
                 const providerKeys = lastKeyStatistics ? (lastKeyStatistics[h.provider] || lastKeyStatistics[h.provider.toLowerCase()] || {}).keys || [] : [];
-                const keyStatusList = providerKeys.map(k => `
-                    <span class="badge ${k.status === 'active' ? 'badge-info' : 'badge-error'}" style="margin-right:5px; margin-bottom:5px; display:inline-block;">
-                        #${k.index + 1} / ${k.tier}
-                    </span>
-                `).join('');
+                const keyStatusList = providerKeys.map(k => {
+                    const q = k.quota || {};
+                    const pct = q.day_pct || 0;
+                    const barColor = pct >= 90 ? 'var(--danger)' : (pct >= 70 ? 'var(--warning)' : 'var(--success)');
+                    const cd = q.cooldown_remaining_sec > 0 ? ` · 쿨다운 ${Math.ceil(q.cooldown_remaining_sec/60)}m` : '';
+                    const rs = q.day_reset_in_sec || 0;
+                    const resetTxt = `${Math.floor(rs/3600)}h${Math.floor((rs%3600)/60)}m`;
+                    const flags = (q.is_forbidden ? ' · ⛔403' : '') + (q.is_quota_limit ? ' · ⚠쿼터' : '');
+                    return `
+                    <div style="border:1px solid #eee; border-radius:6px; padding:6px 8px; margin-bottom:6px; font-size:0.75rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span><strong>#${k.index + 1}</strong> ${esc(k.tier)}
+                                <span class="badge badge-${k.status === 'active' ? 'success' : 'error'}" style="font-size:0.6rem;">${esc(k.status)}</span>${cd}</span>
+                            <span>일일 ${q.day_used || 0}/${q.day_limit || '-'} (${pct}%)</span>
+                        </div>
+                        <div style="background:#eee; border-radius:3px; height:5px; margin-top:4px;">
+                            <div style="width:${Math.min(100, pct)}%; height:5px; background:${barColor}; border-radius:3px;"></div>
+                        </div>
+                        <div style="color:#999; margin-top:3px;">분당 ${q.minute_used || 0}/${q.minute_limit || '-'} · 일일리셋 ${resetTxt}${flags}</div>
+                    </div>`;
+                }).join('');
 
                 return `
                 <div class="card">
@@ -329,7 +369,7 @@
                     <div style="margin-bottom:10px;">
                         ${keyStatusList || '<span style="color:#999; font-size:0.8rem;">No keys discovered</span>'}
                     </div>
-                    ${h.last_error ? `<div style="font-size:0.75rem; color:var(--danger); margin-bottom:10px; padding:8px; background:#fff5f5; border-radius:4px;"><strong>Last Error:</strong> ${h.last_error}</div>` : ''}
+                    ${h.last_error ? `<div style="font-size:0.75rem; color:var(--danger); margin-bottom:10px; padding:8px; background:#fff5f5; border-radius:4px;"><strong>Last Error:</strong> ${esc(h.last_error)}</div>` : ''}
                     <div style="font-size:0.7rem; color:#888;">최근 업데이트: ${new Date(h.updated_at).toLocaleString()}</div>
                 </div>
                 `;
@@ -365,12 +405,12 @@
             const tbody = document.querySelector('#sessions-table tbody');
             tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">불러오는 중...</td></tr>';
             try {
-                const res = await fetch('/v1/admin/sessions');
+                const res = await adminFetch('/v1/admin/sessions');
                 const data = await res.json();
                 tbody.innerHTML = data.map(s => `
                     <tr>
-                        <td><code>${s.session_id}</code></td>
-                        <td>${s.title || 'Untitled'}</td>
+                        <td><code>${esc(s.session_id)}</code></td>
+                        <td>${esc(s.title || 'Untitled')}</td>
                         <td>${s.message_count}</td>
                         <td>${new Date(s.updated_at).toLocaleString()}</td>
                         <td>
@@ -384,7 +424,7 @@
 
         async function createNewSession() {
             try {
-                const res = await fetch('/v1/admin/sessions/new', { method: 'POST' });
+                const res = await adminFetch('/v1/admin/sessions/new', { method: 'POST' });
                 const data = await res.json();
                 alert(`새 세션이 생성되었습니다: ${data.session_id}`);
                 loadSessions();
@@ -394,7 +434,7 @@
         async function deleteSession(id) {
             if (!confirm('정말 이 세션을 삭제하시겠습니까?')) return;
             try {
-                await fetch(`/v1/admin/sessions/${id}`, { method: 'DELETE' });
+                await adminFetch(`/v1/admin/sessions/${id}`, { method: 'DELETE' });
                 loadSessions();
             } catch (e) { alert('실패: ' + e.message); }
         }
@@ -407,15 +447,15 @@
             const tbody = document.querySelector('#logs-table tbody');
             tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">불러오는 중...</td></tr>';
             try {
-                const res = await fetch('/v1/admin/logs?limit=100');
+                const res = await adminFetch('/v1/admin/logs?limit=100');
                 const logs = await res.json();
                 tbody.innerHTML = logs.map(l => `
                     <tr>
                         <td style="white-space:nowrap; font-size:0.75rem;">${new Date(l.created_at).toLocaleString()}</td>
-                        <td><span class="badge badge-${l.level.toLowerCase() === 'error' ? 'danger' : (l.level.toLowerCase() === 'warning' ? 'warning' : 'info')}">${l.level}</span></td>
-                        <td><strong>${l.category}</strong></td>
-                        <td style="max-width:300px;">${l.message}</td>
-                        <td class="log-meta">${l.metadata}</td>
+                        <td><span class="badge badge-${l.level.toLowerCase() === 'error' ? 'danger' : (l.level.toLowerCase() === 'warning' ? 'warning' : 'info')}">${esc(l.level)}</span></td>
+                        <td><strong>${esc(l.category)}</strong></td>
+                        <td style="max-width:300px;">${esc(l.message)}</td>
+                        <td class="log-meta">${esc(l.metadata)}</td>
                     </tr>
                 `).join('');
             } catch (e) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--danger); text-align:center;">실패</td></tr>'; }
@@ -424,7 +464,7 @@
         async function clearLogs() {
             if (!confirm('모든 시스템 로그를 초기화하시겠습니까?')) return;
             try {
-                await fetch('/v1/admin/logs/clear', { method: 'POST' });
+                await adminFetch('/v1/admin/logs/clear', { method: 'POST' });
                 loadLogs();
             } catch (e) { alert('실패: ' + e.message); }
         }
@@ -433,7 +473,7 @@
             const days = document.getElementById('retention-days').value;
             if (!confirm(`${days}일보다 오래된 모든 세션을 삭제하시겠습니까?`)) return;
             try {
-                const res = await fetch(`/v1/admin/sessions/cleanup?days=${days}`, { method: 'POST' });
+                const res = await adminFetch(`/v1/admin/sessions/cleanup?days=${days}`, { method: 'POST' });
                 const data = await res.json();
                 alert(`${data.deleted_count}개의 오래된 세션이 정리되었습니다.`);
                 loadSessions();
@@ -447,7 +487,7 @@
             const keys = keysStr.split(',').map(k => k.trim()).filter(k => k);
             
             try {
-                const res = await fetch('/v1/admin/keys', {
+                const res = await adminFetch('/v1/admin/keys', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ provider, keys })
