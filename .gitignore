@@ -49,3 +49,7 @@ AGENTS.ko.md
 .github/copilot-instructions.md
 
 /.archive/
+
+# 게이트웨이 실행 로그 — 로테이션분까지 합쳐 225MB 가 쌓여 있었다
+gateway.log*
+gateway_run*.log
