@@ -10,7 +10,7 @@
 
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -148,7 +148,6 @@ async def test_auto_web_fetch_disabled_skips_intent_classifier(sm):
     service.analyzer.detect_web_intent = MagicMock(return_value=False)
 
     intent = MagicMock()
-    intent.is_ready = True
     intent.needs_web_search = AsyncMock(return_value=True)
     service.intent_classifier = intent
 

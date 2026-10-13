@@ -4,7 +4,7 @@ from typing import Any
 
 import google.generativeai as genai
 
-from src.core.exceptions import RateLimitError, ServiceUnavailableError
+from src.core.exceptions import AuthenticationError, RateLimitError, ServiceUnavailableError
 from src.core.logging import get_logger
 from src.domain.enums import ModelType
 from src.domain.interfaces import IContextManager, ILLMProvider
@@ -136,13 +136,31 @@ class GeminiAdapter(ILLMProvider):
             logger.error(f"Gemini request failed: {err_str}")
 
             if "403" in err_str:
-                # 403 Forbidden is a project/key level failure, not a temporary rate limit
+                # 403 Forbidden은 프로젝트/키 단위 영구 거부다(실측: "project has
+                # been denied access"). 과거엔 ServiceUnavailableError로 분류해
+                # resilience_manager가 이를 "공급자 장애"로 보고 circuit breaker
+                # 실패로도 집계했다(실측 2026-10-13: 거부된 키 12/13개가 반복
+                # 걸려 서킷이 통째로 OPEN되고, 아직 살아있는 키 1개까지 막혔다).
+                # AuthenticationError로 분류하면 resilience_manager의 일반
+                # Exception 경로를 타 key_manager.report_failure(그 키만 영구
+                # 제외)는 그대로 호출되면서도 breaker.report_failure()는 호출되지
+                # 않는다 — 공급자 전체가 아니라 "그 키"만 막힌 문제이므로 공급자
+                # 자체를 격리할 근거가 없다.
                 error_msg = f"Access denied (403): {err_str}"
-                raise ServiceUnavailableError(error_msg) from e
+                raise AuthenticationError(error_msg) from e
 
             if "429" in err_str:
                 error_msg = f"Rate limit exceeded: {err_str}"
                 raise RateLimitError(error_msg) from e
+
+            if "503" in err_str or "overloaded" in err_str.lower():
+                # 503("model is overloaded"/high demand)도 429와 같은 일시적
+                # 신호다 — ServiceUnavailableError로 두면 역시 circuit breaker가
+                # "공급자 장애"로 오인해 OPEN된다. RateLimitError로 분류해 짧게
+                # 대기 후 재시도하게 한다(보통 수십 초 안에 회복되는 일시 과부하라
+                # RateLimitError 기본 1시간 쿨다운 대신 짧은 retry_after를 준다).
+                error_msg = f"Gemini overloaded (503): {err_str}"
+                raise RateLimitError(error_msg, retry_after=15.0) from e
 
             error_msg = f"Unexpected error: {err_str}"
             raise ServiceUnavailableError(error_msg) from e
@@ -381,30 +399,39 @@ class GeminiAdapter(ILLMProvider):
         return None
 
     async def probe_key(self, api_key: str) -> dict[str, Any]:
-        try:
-            genai.configure(api_key=api_key)
-            test_model_name = "gemini-2.5-flash"
-            try:
-                model = genai.GenerativeModel(test_model_name)
-                await model.generate_content_async(
-                    "hi", generation_config={"max_output_tokens": 1}
-                )
-                tier = "premium"
-            except Exception as e:
-                err_msg = str(e).lower()
-                if "limit: 0" in err_msg or "free_tier" in err_msg or "404" in err_msg:
-                    tier = "free"
-                elif "429" in err_msg:
-                    logger.warning(f"Key {api_key[:8]}... is still exhausted (429)")
-                    raise
-                else:
-                    tier = "free"
+        """실패하면 예외를 그대로 전파한다 — `openai_compat.py`의 같은 메서드와
+        동일한 원칙(그 파일 docstring 참고: "과거처럼 내부에서 삼키지 않음 —
+        호출부가 403/402 등을 분류해 키를 영구 제외할 수 있게").
 
-            return {
-                "tier": tier,
-                "status": "active",
-                "can_list_models": True,
-            }
+        실측(2026-10-13): 과거 이 메서드는 이중으로 삼켰다 — 안쪽에서 429만
+        다시 raise하고 403(거부)은 "else: tier=free"로 거짓 성공 처리했고,
+        바깥 try/except가 그 재-raise 된 429조차 다시 삼켜 `{"status":
+        "failed", ...}` 딕셔너리로 바꿔 돌려줬다. 둘 다 `gateway.
+        probe_active_keys`의 예외 핸들러(403/429/402 분류 → `key_manager.
+        report_failure` → 영구 제외)에 도달하지 못해, denied 키(13개 중 12개,
+        "project has been denied access") 가 활성 풀에 그대로 남았다. 그 결과
+        실제 채팅 호출에서 매번 403이 났고(`generate()`), 그게 반복 집계돼
+        circuit breaker가 OPEN됐다."""
+        genai.configure(api_key=api_key)
+        test_model_name = "gemini-2.5-flash"
+        try:
+            model = genai.GenerativeModel(test_model_name)
+            await model.generate_content_async(
+                "hi", generation_config={"max_output_tokens": 1}
+            )
+            tier = "premium"
         except Exception as e:
-            logger.error(f"Probe failed for Gemini key {api_key[:8]}: {e}")
-            return {"tier": "error", "status": "failed", "error": str(e)}
+            err_msg = str(e).lower()
+            if "limit: 0" in err_msg or "free_tier" in err_msg or "404" in err_msg:
+                tier = "free"
+            else:
+                # 429(쿼터 소진)·403(거부)·402 등은 전부 그대로 전파한다 —
+                # 호출부가 분류해 쿨다운/영구 제외를 건다.
+                logger.warning(f"Key {api_key[:8]}... probe failed: {err_msg[:150]}")
+                raise
+
+        return {
+            "tier": tier,
+            "status": "active",
+            "can_list_models": True,
+        }

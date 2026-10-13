@@ -55,6 +55,18 @@ class CircuitBreaker:
 
         return True
 
+    def remaining_recovery_seconds(self) -> float:
+        """OPEN 상태에서 HALF_OPEN 으로 전환되기까지 남은 시간(초).
+
+        strict 라우팅이 Circuit OPEN 으로 즉시 거부될 때, 클라이언트에게 "언제 다시
+        시도하면 될지"를 HTTP Retry-After 헤더로 알려주기 위해 쓴다. CLOSED/HALF_OPEN
+        이면 0(바로 재시도해도 됨 — HALF_OPEN 은 이미 프로브가 진행 중일 뿐 거부가
+        아니다)."""
+        if self.state != "OPEN":
+            return 0.0
+        remaining = self.recovery_timeout - (time.time() - self.last_failure_time)
+        return max(0.0, remaining)
+
     def report_success(self) -> None:
         """성공 호출 보고."""
         if self.state == "HALF_OPEN":

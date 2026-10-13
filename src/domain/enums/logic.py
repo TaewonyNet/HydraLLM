@@ -39,21 +39,18 @@ class ModelType(Enum):
     GEMINI_FLASH = "gemini-flash"
     GEMINI_FLASH_VISION = "gemini-flash-vision"
 
-    # Groq Models
-    GROQ_LLAMA_4_70B = "llama-4-70b"
-    GROQ_LLAMA_4_8B = "llama-4-8b"
-    GROQ_LLAMA_3_3_70B = "llama-3.3-70b-versatile"
-    GROQ_DEEPSEEK_V3_1 = "deepseek-v3.1"
-    GROQ_DEEPSEEK_R1_70B = "deepseek-r1-distill-llama-70b"
-    GROQ_DEEPSEEK_R1_32B = "deepseek-r1-distill-qwen-32b"
+    # Groq Models (2026-10 실측 /models 기준. llama-4-*/llama-3.3-70b-versatile/
+    # deepseek-* 는 더 이상 Groq 카탈로그에 없어 제거 — 아래 4개만 실존.)
+    GROQ_GPT_OSS_120B = "openai/gpt-oss-120b"
+    GROQ_GPT_OSS_20B = "openai/gpt-oss-20b"
+    GROQ_QWEN_3_8_27B = "qwen/qwen3.8-27b"
+    GROQ_ALLAM_2_7B = "allam-2-7b"
 
-    # Cerebras Models
-    CEREBRAS_GPT_5_3_CODEX = "gpt-5.3-codex-spark"
-    CEREBRAS_DEEPSEEK_R1_70B = "deepseek-r1-distill-llama-70b"
-    CEREBRAS_GLM_4_6 = "glm-4.6-reap-252b"
-    CEREBRAS_QWEN_3_235B = "qwen-3-235b-instruct"
+    # Cerebras Models (2026-10 실측 /models 기준. gpt-5.3-codex-spark/deepseek-r1-*/
+    # glm-4.6-*/qwen-3-235b-instruct/llama-3.3-70b 는 더 이상 Cerebras 카탈로그에
+    # 없어 제거 — 아래 2개만 실존.)
     CEREBRAS_GPT_OSS_120B = "gpt-oss-120b"
-    CEREBRAS_LLAMA_3_3_70B = "llama-3.3-70b"
+    CEREBRAS_QWEN_3_8_27B = "qwen-3.8-27b"
     # Other Models
     GROQ_GROQ = "groq"
     CEREBRAS_LLAMA = "llama"

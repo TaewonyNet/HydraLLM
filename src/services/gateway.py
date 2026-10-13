@@ -12,10 +12,11 @@ from src.adapters.providers.openai_compat import OpenAICompatAdapter
 from src.core.config import settings
 from src.core.exceptions import (
     BaseAppError,
+    GatewayTimeoutError,
 )
 from src.core.logging import request_id_ctx
 from src.domain.enums import AgentType, ModelType, ProviderType
-from src.domain.interfaces import ILLMProvider, IRouter, ISessionManager
+from src.domain.interfaces import ILLMProvider, IRouter, ISessionManager, IWebScraper
 from src.domain.models import ChatMessage, ChatRequest, ChatResponse
 from src.services.agent_executor import AgentExecutor
 from src.services.analyzer import ContextAnalyzer
@@ -42,7 +43,7 @@ class Gateway(IRouter):
         analyzer: ContextAnalyzer | None = None,
         key_manager: KeyManager | None = None,
         session_manager: ISessionManager | None = None,
-        scraper: WebScraper | None = None,
+        scraper: IWebScraper | None = None,
         compressor: ContextCompressor | None = None,
         metrics_service: MetricsService | None = None,
         intent_classifier: IntentClassifier | None = None,
@@ -176,9 +177,19 @@ class Gateway(IRouter):
 
         llm_start = time.perf_counter()
         try:
-            response, retry_parts = await self.resilience.execute_with_resilience(
-                request, decision
-            )
+            # 요청 전체(공급자 재시도 전부 포함) 마감 시간 — 클라이언트가 무기한 대기하지
+            # 않게 한다(실측 사고: 413→Gemini 폴백→403 재시도가 겹쳐 300초 넘게 걸렸다).
+            try:
+                response, retry_parts = await asyncio.wait_for(
+                    self.resilience.execute_with_resilience(request, decision),
+                    timeout=settings.request_deadline_seconds,
+                )
+            except asyncio.TimeoutError as te:
+                timeout_msg = (
+                    f"요청 처리 시간 초과({settings.request_deadline_seconds}s): "
+                    "공급자 재시도를 마감 시간 안에 끝내지 못했다."
+                )
+                raise GatewayTimeoutError(timeout_msg) from te
             latency_ms = int((time.perf_counter() - llm_start) * 1000)
 
             provider_name = (
@@ -311,7 +322,11 @@ class Gateway(IRouter):
                 self._adapters[adapter_key] = OpenAICompatAdapter(
                     "https://api.groq.com/openai/v1",
                     api_key,
-                    default_model=ModelType.GROQ_LLAMA_3_3_70B.value,
+                    # llama-3.3-70b-versatile 는 Groq 에 더 이상 없다(실측 404). 고정
+                    # default_model 로 하드코딩하지 않고, preferred_default_model 로 희망값만
+                    # 주면 어댑터가 /models 탐색으로 실제 존재를 검증한 뒤 쓴다(Cerebras 와
+                    # 동일 패턴).
+                    preferred_default_model=ModelType.GROQ_GPT_OSS_120B.value,
                 )
             elif provider == ProviderType.CEREBRAS:
                 self._adapters[adapter_key] = CerebrasAdapter(api_key)
@@ -338,16 +353,34 @@ class Gateway(IRouter):
         async with self._recover_lock:
             await self._recover_failed_keys_impl()
 
-    async def probe_active_keys(self) -> dict[str, int]:
+    async def probe_active_keys(
+        self, providers: tuple[ProviderType, ...] | None = None
+    ) -> dict[str, int]:
         """활성 키를 실제 호출로 probe 해 '외부 사용 포함' 실측 가용성을 갱신한다.
 
         자체 카운트는 HydraLLM 경유분만 세므로, 다른 도구/키 공유로 인한 쿼터 소진을
-        놓친다. 이 메서드는 각 활성 키를 경량 probe(generateContent 1토큰)해 실제 상태를
-        확인한다 — 429(외부 포함 소진)는 쿨다운, 성공은 last_probe 기록.
-        ⚠ probe 자체가 무료 쿼터를 소모하므로 on-demand/긴 주기로만 호출할 것.
+        놓친다. 이 메서드는 각 활성 키를 경량 probe(생성형 호출 1회, 최소 토큰)해 실제
+        상태를 확인한다 — 429(외부 포함 소진)는 쿨다운, 성공은 last_probe 기록,
+        403/denied·402(결제 필요)는 report_failure 를 거쳐 영구 제외(item 5/402)된다.
+        Groq/Cerebras 어댑터의 probe_key() 는 /models 목록이 아니라 짧은 chat
+        completion 1회를 쓴다 — /models 는 402(결제 필요)를 못 잡기 때문(실측:
+        Cerebras 키가 /models 는 200 인데 chat completions 는 402).
+        ⚠ probe 자체가 쿼터를 소모하므로 on-demand/긴 주기로만 호출할 것. startup
+        에서는 `providers`로 Gemini 만 좁혀 불필요한 Groq/Cerebras 쿼터 소모를 피한다.
         """
-        result = {"probed": 0, "ok": 0, "exhausted": 0, "denied": 0, "skipped": 0}
-        for p in (ProviderType.GEMINI, ProviderType.GROQ, ProviderType.CEREBRAS):
+        result = {
+            "probed": 0,
+            "ok": 0,
+            "exhausted": 0,
+            "denied": 0,
+            "payment_required": 0,
+            "skipped": 0,
+        }
+        for p in providers or (
+            ProviderType.GEMINI,
+            ProviderType.GROQ,
+            ProviderType.CEREBRAS,
+        ):
             for k in self.key_manager.get_active_keys(p):
                 adapter = self._get_provider_adapter(p, k)
                 prober = getattr(adapter, "probe_key", None)
@@ -368,10 +401,24 @@ class Gateway(IRouter):
                     is_exhausted = (
                         "429" in err or "quota" in err or "resource_exhausted" in err
                     )
-                    is_denied = "403" in err or "permission" in err or "denied" in err
-                    if is_exhausted or is_denied:
+                    is_payment_required = "402" in err or "payment" in err
+                    is_denied = not is_payment_required and (
+                        "403" in err or "permission" in err or "denied" in err
+                    )
+                    if is_exhausted or is_denied or is_payment_required:
                         await self.key_manager.report_failure(p, k, e)
-                        result["exhausted" if is_exhausted else "denied"] += 1
+                        logger.warning(
+                            "키 probe 실패(%s, index=%d): %s",
+                            p.value,
+                            self.key_manager.get_key_index(p, k),
+                            str(e)[:200],
+                        )
+                        if is_exhausted:
+                            result["exhausted"] += 1
+                        elif is_payment_required:
+                            result["payment_required"] += 1
+                        else:
+                            result["denied"] += 1
                     self.key_manager.update_key_metadata(
                         p, k, {"last_probe": {"status": "fail", "ts": time.time()}}
                     )
@@ -383,6 +430,13 @@ class Gateway(IRouter):
         for p in ProviderType:
             failed = self.key_manager.get_failed_keys(p)
             for k in failed:
+                # 403/forbidden(예: Gemini "project has been denied access")으로 영구
+                # 제외된 키는 쿨다운이 지나도 재프로브하지 않는다 — 시간이 지나도 저절로
+                # 풀리지 않는 설정 문제라 요청마다/주기마다 재시도·컨텍스트 업로드를
+                # 반복하는 낭비를 막는다(item 5).
+                if self.key_manager.is_permanently_excluded(p, k):
+                    continue
+
                 # 60초 폴링은 주기일 뿐, 카테고리별 쿨다운(403→24h/quota→1h/기타→5m)을
                 # 존중한다. cooldown_until 이 아직 미래면 재프로브하지 않고 건너뛴다.
                 cooldown_until = self.key_manager.get_key_metadata(p, k).get(

@@ -75,6 +75,7 @@ Client ──► POST /v1/chat/completions
 - `IRouter`: `route_request`, `get_status`, `get_supported_models`, `get_all_models`.
 - `ISessionManager`: 세션 로드/영속, 설정, 공급자 헬스, 웹 캐시/스크래핑 메트릭 접근(SQLite).
 - `IContextManager`: 멀티모달 컨텍스트 오프로드/캐싱 — Gemini 어댑터가 이 ABC 에 의존(구체 클래스 결합 제거).
+- `IWebScraper`: `startup`, `shutdown`, `scrape_url(url, mode, timeout_ms)`, `search_and_scrape(query, num_results, mode)` — 웹 백엔드 계약. 구현체는 `services/scraper.py::WebScraper`(inprocess)와 `adapters/web/mcp_search.py::McpWebScraper`(mcp).
 
 ---
 
@@ -206,16 +207,28 @@ for provider in PROVIDER_PRIORITY:
 
 ## 8. 웹 보강
 
-`WebEnrichmentCoordinator` → `WebContextService`(+`IntentClassifier`/`KeywordStore`/`WebScraper`). 라우팅 **이후** 실행(§2.1).
+`WebEnrichmentCoordinator` → `WebContextService`(+`IntentClassifier`/`KeywordStore`/`IWebScraper`). 라우팅 **이후** 실행(§2.1).
 
 - **트리거/페치**: `auto_web_fetch ?? settings.enable_auto_web_fetch`; `_URL_PATTERN` 으로 URL 추출(+`web_fetch`);
   명시 URL 스크랩, 없으면 `needs_web_search` 또는 `has_search` 일 때 `search_and_scrape`. 페치당 `max_chars=6000`.
 - **추출**: `trafilatura` 설치 시 본문을 깨끗한 **markdown** 으로 추출(토큰당 신호 밀도↑ → fast tier 도 웹 질의를 잘 답함),
   없으면 BeautifulSoup 텍스트 폴백(무회귀). 캡과 결합돼 주입 컨텍스트가 fast 윈도우에 충분히 들어가므로 웹 의도가 더 이상 Gemini 를 강제하지 않는다(§5).
   `web_cache_ttl_hours` SQLite 캐시 + `record_scraping` 메트릭(cache_hit/success/failed/error).
-- **인텐트 분류**: 부분문자열 매치 → trivial/meta 쿼리 early-return → 임베딩(cosine, `bge-m3:latest`; 유효 임계값
+- **인텐트 분류**: 부분문자열 매치(학습 키워드) → **정규식 패턴**(아래) → trivial/meta 쿼리 early-return → 임베딩(cosine, `bge-m3:latest`; 유효 임계값
   **0.58**(`i18n/{en,ko}.json`); `IntentClassifier.__init__` 의 0.65 하드코딩은 `initialize()` 가 항상 덮어씀.
-  `max_pos ≥ threshold and avg_pos > avg_neg`).
+  `max_pos ≥ threshold and avg_pos > avg_neg`). 임베딩이 준비되지 않았으면(`is_ready=False`) 임베딩 단계만 건너뛰고
+  키워드·정규식 판정은 그대로 한다.
+- **정규식 패턴**: `data/web_patterns.{ko,en}.json` 의 `include`/`exclude`(`{id, desc, pattern}`). 두 언어 패턴을 모두 적용하며,
+  include 매치 후 exclude 매치가 없을 때만 웹 필요로 판정(결과 `regex:<lang>:<id>`). "검색해서/search for/look up" 같은
+  **검색 요청**만 잡고, "검색 기능·binary search·search engine" 처럼 검색이 **주제**인 문장은 exclude 로 거른다.
+  잘못된 정규식은 경고 후 건너뛴다. 파일이 없으면 정규식 단계 없음.
+- **검색 엔진 체인**: `SEARCH_PROVIDERS`(기본 `duckduckgo,bing`) 순서로 시도, 링크 0건·오류면 다음 엔진.
+  `openserp`(`OPENSERP_BASE_URL`/`OPENSERP_ENGINE`), `searxng`(`SEARXNG_BASE_URL`, JSON 포맷) 선택 가능. 알 수 없는 이름은 무시.
+- **웹 백엔드**: `WEB_BACKEND=inprocess`(기본, 게이트웨이 내 `WebScraper`) 또는 `mcp`. `mcp` 는 `McpWebScraper` 가
+  독립 프로세스 `search_mcp/server.py`(Streamable HTTP, 별도 venv — MCP SDK 의 `anyio>=4` 가 FastAPI 0.104 의 `anyio<4` 와 충돌)를
+  `search_and_fetch`/`fetch` 도구로 호출한다. 게이트웨이 쪽은 httpx 로 클라이언트를 최소 구현(SDK 없음). 실패(연결·타임아웃·도구 오류·
+  세션 재만료) 시 `SEARCH_MCP_FALLBACK=true` 면 내장 `WebScraper` 로 대신 수행(브라우저는 첫 폴백 때 지연 기동).
+  LLM 호출 수는 늘지 않는다(검색 여부는 게이트웨이가 판정). `SEARCH_MCP_TOKEN` 설정 시 Bearer 인증.
 - **키워드 스토어**: `data/web_keywords.{ko,en}.json`, 길이 2~60, 대소문자 무시 dedup, 언어당 FIFO 200.
   키워드는 admin 라우트로만 추가(소스 하드코딩 금지); `scripts/validate_flow.py` 가 false negative 를 자동 학습.
 - **주입 불변식**: `web_text` 생성 시 `system` 메시지(`name="web_context"`)를 `messages.insert(-1)` 하고

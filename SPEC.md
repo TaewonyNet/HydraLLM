@@ -164,7 +164,7 @@ Client ──► POST /v1/chat/completions (or /v1/responses)
 
 #### `interfaces/logic.py` — ABC contracts
 
-Six abstract base classes. Adapters/services implement these; inner layers depend on
+Seven abstract base classes. Adapters/services implement these; inner layers depend on
 the ABCs, never on concrete outer classes.
 
 - `ILLMProvider`: `generate`, `get_supported_models`, `get_max_tokens`, `is_multimodal`, `discover_models`, `probe_key`.
@@ -173,6 +173,7 @@ the ABCs, never on concrete outer classes.
 - `IRouter`: `route_request`, `get_status`, `get_supported_models`, `get_all_models`.
 - `ISessionManager`: session load/persist, settings, provider-health, and web-cache/scraping-metrics accessors (SQLite-backed).
 - `IContextManager`: multimodal context offload/caching (`should_offload`, `prepare_temp_file`, `get_cached_file`, `cache_file`, …).
+- `IWebScraper`: `startup`, `shutdown`, `scrape_url(url, mode, timeout_ms)`, `search_and_scrape(query, num_results, mode)` — the web backend contract, implemented by `services/scraper.py::WebScraper` (inprocess) and `adapters/web/mcp_search.py::McpWebScraper` (mcp).
 
 > The Gemini adapter depends on the `IContextManager` ABC; `services.context_manager.ContextManager`
 > is the concrete implementation. All adapters depend only on domain ABCs, never on concrete
@@ -371,7 +372,7 @@ remains; a **strict** request honours the user's explicit choice and fails fast 
 
 Grounds responses in real-time web data. Owned by `WebEnrichmentCoordinator`
 (`web_coordinator.py`) over `WebContextService` (`web_context_service.py`),
-`IntentClassifier`, `KeywordStore`, and `WebScraper`. Runs **after** routing (§2.2).
+`IntentClassifier`, `KeywordStore`, and an `IWebScraper` backend. Runs **after** routing (§2.2).
 
 ### 8.1 Trigger & fetch
 
@@ -393,10 +394,12 @@ Grounds responses in real-time web data. Owned by `WebEnrichmentCoordinator`
 ### 8.2 Intent classification
 
 `IntentClassifier.needs_web_search` evaluates in order: **substring match** against the
-keyword store → **trivial/meta-query early-return** (`False`) → **embedding similarity**
+keyword store → **regex patterns** (§8.3a) → **trivial/meta-query early-return** (`False`) → **embedding similarity**
 (cosine vs positive/negative exemplars, model `bge-m3:latest`; the operative threshold is
 `0.58`, set in `i18n/{en,ko}.json` and loaded by `initialize()` — the `0.65` hardcoded in
 `IntentClassifier.__init__` is always overridden. Positive iff `max_pos ≥ threshold and avg_pos > avg_neg`).
+If embeddings are not ready (`is_ready=False`) only the embedding step is skipped; keyword and
+regex checks still run.
 
 ### 8.3 Keyword store (incremental learning)
 
@@ -404,6 +407,26 @@ keyword store → **trivial/meta-query early-return** (`False`) → **embedding 
 length 2–60, case-insensitively de-duplicated, FIFO-capped at 200/lang. Keywords are added
 **only** through the admin routes (§4.2); `scripts/validate_flow.py` auto-feeds false
 negatives to `…/keywords/learn`. Do not hardcode keywords in source.
+
+### 8.3a Regex patterns
+
+`data/web_patterns.{ko,en}.json` hold `include`/`exclude` lists of `{id, desc, pattern}`. Both
+languages' patterns apply; a query is web-positive when an include matches and no exclude
+does (reported as `regex:<lang>:<id>`). Includes catch explicit **search requests**
+("검색해서", "search for", "look it up"); excludes drop sentences where search is the **topic**
+("검색 기능", "binary search", "search engine"). Invalid regexes are logged and skipped.
+
+### 8.3b Search engines & web backend
+
+- **Engine chain**: `SEARCH_PROVIDERS` (default `duckduckgo,bing`) is tried in order; zero links
+  or an error falls through to the next engine. `openserp` (`OPENSERP_*`) and `searxng`
+  (`SEARXNG_*`, JSON format) are optional.
+- **Backend**: `WEB_BACKEND=inprocess` (default) uses the in-gateway `WebScraper`. `WEB_BACKEND=mcp`
+  uses `McpWebScraper`, a minimal httpx Streamable HTTP MCP client, calling the standalone
+  `search_mcp/server.py` (own venv: the MCP SDK needs `anyio>=4`, FastAPI 0.104 pins `anyio<4`).
+  On any MCP failure it falls back to the in-process scraper when `SEARCH_MCP_FALLBACK=true`
+  (browser started lazily on first fallback). No extra LLM calls: the gateway still decides
+  whether to search. `SEARCH_MCP_TOKEN` enables Bearer auth. See `search_mcp/README.ko.md`.
 
 ### 8.4 Injection invariant
 

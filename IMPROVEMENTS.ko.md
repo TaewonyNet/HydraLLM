@@ -48,11 +48,28 @@
 - SPEC.md/SPEC.ko.md 11절 전면 재작성(소스 검증 기반) + 키 부재 라우팅(§5.1·§6.4) 명시.
 - 회귀 테스트 대폭 추가(circuit_breaker·scraper SSRF·key cooldown·admin auth·routing 차별점·cerebras).
 
-## 4. 향후 개선 로드맵 / 잔여 과제
+## 4. 웹 검색 확장·공급자 오류 처리 (2026-10-13)
+
+### 4.1 웹 검색
+- **엔진 체인**: `SEARCH_PROVIDERS` 순서 폴백. openserp·SearXNG 를 옵션으로 추가(기본값은 기존 `duckduckgo,bing`).
+- **정규식 의도 판정**: `data/web_patterns.{ko,en}.json` include/exclude. 검색 요청만 잡고 검색이 주제인 문장은 거름.
+- **검색 MCP 서버**: `search_mcp/server.py`(별도 venv) + 게이트웨이 `WEB_BACKEND=mcp`(httpx 최소 MCP 클라이언트, 실패 시 내장 스크래퍼 폴백).
+- **버그**: 임베딩(Ollama) 초기화 실패 시 키워드·정규식 판정까지 꺼져 "검색해서 …" 요청도 웹 보강이 안 되던 문제 수정.
+
+### 4.2 공급자 오류 처리
+- **Gemini 403**: `AuthenticationError` 로 분류해 그 키만 영구 제외(서킷 브레이커가 공급자 전체를 OPEN 하던 문제). API 는 403 반환.
+- **Gemini 503(overloaded)**: 짧은 `retry_after` 의 `RateLimitError` 로 분류.
+- **probe_key**: 429·403 등을 삼키지 않고 전파해 호출부가 쿨다운/영구 제외를 걸게 함.
+
+### 4.3 남은 과제
+- 웹 보강 단계가 요청 전체 마감(90초)에 포함되지 않음 — 폴백 시 131초 관찰.
+- 검색어 지시어("정리해줘" 등) 정제, openserp snippet 활용, 빈 본문 캐시 금지, 오늘 날짜 주입, Gemini 자동선택 모델 404 필터.
+
+## 5. 향후 개선 로드맵 / 잔여 과제
 - **분산 상태 관리**: Redis 기반 키 상태·서킷 브레이커 동기화(단일 노드 한계).
 - ~~라우팅 단일화~~ **재평가됨**: analyzer(결정)/resilience(복구) 분리는 *의도된 설계*(순수성·테스트성·복구 적소)이므로 통합하지 않는다. strict 판정이 덮어쓰인 `request.model`을 읽던 구조 결함(S1)은 `RoutingDecision.strict` 도입으로 **해소 완료**.
 - **2차 감사 잔여(MED/LOW)**: local_cli subprocess 타임아웃/kill(R7), gemini 동기 블로킹(R8) 및 전역 configure 키 race(R9), keyword_store 블로킹 IO(R10), has_images substring 오탐(R11), 세션 마이그레이션 롤백(R14)·fork None 가드(R15) 등.
 - **LiteLLM 전환 검토**: 표준 인터페이스 점진 마이그레이션.
 
 ---
-*업데이트 날짜: 2026-06-21*
+*업데이트 날짜: 2026-10-13*

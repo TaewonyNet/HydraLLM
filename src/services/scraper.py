@@ -6,7 +6,7 @@ import logging
 import re
 import socket
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 try:
@@ -19,6 +19,7 @@ try:
 except ImportError:
     pass
 
+import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import Browser, Playwright, Route, async_playwright
 from scrapling.fetchers import StealthyFetcher
@@ -30,11 +31,22 @@ try:
 except ImportError:
     trafilatura = None  # type: ignore[assignment]
 
+from src.core.config import settings
+from src.domain.interfaces.logic import IWebScraper
 from src.i18n import t, t_patterns
 
 logger = logging.getLogger(__name__)
 
 ScrapeMode = Literal["standard", "simple", "network_only"]
+_SCRAPE_MODES: tuple[ScrapeMode, ...] = ("standard", "simple", "network_only")
+
+
+def _as_scrape_mode(mode: str) -> ScrapeMode:
+    """외부(설정·MCP 인자)에서 받은 모드 문자열을 ScrapeMode 로. 모르는 값은 standard."""
+    for known in _SCRAPE_MODES:
+        if mode == known:
+            return known
+    return "standard"
 
 # SSRF 차단 대상: CGNAT 등 ipaddress 속성으로 안 잡히는 대역만 명시.
 # 루프백/사설/링크로컬/예약/멀티캐스트/미지정은 _is_blocked_ip 의 속성 검사로 처리한다.
@@ -159,9 +171,71 @@ async def _url_resolves_internal(url: str) -> bool:
     )
 
 
-class WebScraper:
-    def __init__(self, headless: bool = True):
+_SEARCH_PROVIDER_ALIASES = {"ddg": "duckduckgo", "duck": "duckduckgo"}
+
+
+def _parse_search_providers(value: list[str] | str | None) -> list[str]:
+    """SEARCH_PROVIDERS 설정(쉼표 문자열 또는 리스트)을 정규화된 엔진 이름 리스트로."""
+    if not value:
+        return ["duckduckgo", "bing"]
+    items = value.split(",") if isinstance(value, str) else list(value)
+    names: list[str] = []
+    for item in items:
+        name = item.strip().lower()
+        name = _SEARCH_PROVIDER_ALIASES.get(name, name)
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _extract_result_links(payload: Any, num_results: int) -> list[str]:
+    """openserp·SearXNG 응답에서 오가닉 결과 URL 만 순서대로 추출(중복 제거).
+
+    openserp v2·SearXNG 는 ``{"results": [{"url", ...}]}``, openserp v1 은 ``[{"url", "ad", ...}]``.
+    """
+    if isinstance(payload, dict):
+        items = payload.get("results") or []
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        return []
+
+    links: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("ad") or item.get("type") not in (None, "organic"):
+            continue
+        url = item.get("url")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            continue
+        if url in links:
+            continue
+        links.append(url)
+        if len(links) >= num_results:
+            break
+    return links
+
+
+class WebScraper(IWebScraper):
+    def __init__(
+        self, headless: bool = True, search_providers: list[str] | None = None
+    ):
         self.headless = headless
+        # 검색 엔진 폴백 체인. 미지정 시 settings.search_providers 를 따른다.
+        self.search_providers = (
+            search_providers
+            if search_providers is not None
+            else _parse_search_providers(settings.search_providers)
+        )
+        self._search_engines: dict[
+            str, Callable[[str, int], Awaitable[list[str]]]
+        ] = {
+            "duckduckgo": self._search_links_duckduckgo,
+            "bing": self._search_links_bing,
+            "openserp": self._search_links_openserp,
+            "searxng": self._search_links_searxng,
+        }
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         # 동시 폴백이 shutdown/startup 을 인터리브하지 않도록 self-heal 직렬화(R5).
@@ -187,7 +261,12 @@ class WebScraper:
             logger.info("Playwright browser closed")
 
     async def scrape_url(
-        self, url: str, mode: ScrapeMode = "standard", timeout_ms: int = 30000
+        self, url: str, mode: str = "standard", timeout_ms: int = 30000
+    ) -> str | None:
+        return await self._scrape_url(url, _as_scrape_mode(mode), timeout_ms)
+
+    async def _scrape_url(
+        self, url: str, mode: ScrapeMode, timeout_ms: int
     ) -> str | None:
         # 실패/차단 시 None 을 반환한다(로컬라이즈된 에러 문자열을 content 로 오인해
         # 주입·캐시하던 버그 방지, R3). 성공 시에만 "TITLE: ..." 문자열을 반환.
@@ -461,17 +540,31 @@ class WebScraper:
 
         return "\n".join(lines)
 
+    async def search_links(
+        self, query: str, num_results: int = 3
+    ) -> tuple[str | None, list[str]]:
+        """SEARCH_PROVIDERS 순서로 엔진을 시도해 (응답한 엔진, 링크 목록)을 반환."""
+        for engine in self.search_providers:
+            search_fn = self._search_engines.get(engine)
+            if search_fn is None:
+                logger.warning(f"Unknown search provider '{engine}' — skipped")
+                continue
+            links = await search_fn(query, num_results)
+            if links:
+                logger.info(f"Search engine '{engine}' returned {len(links)} links")
+                return engine, links
+            logger.warning(
+                f"Search engine '{engine}' returned 0 links for '{query}', "
+                "trying next engine"
+            )
+        return None, []
+
     async def search_and_scrape(
-        self, query: str, num_results: int = 3, mode: ScrapeMode = "standard"
+        self, query: str, num_results: int = 3, mode: str = "standard"
     ) -> str:
         logger.info(f"Performing search for: {query}")
 
-        top_links = await self._search_links_duckduckgo(query, num_results)
-        if not top_links:
-            logger.warning(
-                f"DuckDuckGo returned 0 links for '{query}', trying Bing fallback"
-            )
-            top_links = await self._search_links_bing(query, num_results)
+        _, top_links = await self.search_links(query, num_results)
 
         if not top_links:
             logger.warning(f"All search engines returned 0 links for '{query}'")
@@ -618,3 +711,74 @@ class WebScraper:
                 f"(internal={dropped_internal}, decode_failed={dropped_decode})"
             )
         return top_links
+
+    async def _search_links_openserp(
+        self, query: str, num_results: int
+    ) -> list[str]:
+        """로컬 openserp 서버(https://github.com/karust/openserp)로 검색.
+
+        openserp 주소는 운영자가 설정한 값이라 사설 IP 여도 허용한다. 대신 돌려받은
+        결과 URL 은 search_and_scrape 에서 다른 엔진과 똑같이 SSRF 검증을 거친다.
+        """
+        engine = settings.openserp_engine.strip().strip("/") or "duck"
+        endpoint = f"{settings.openserp_base_url.rstrip('/')}/{engine}/search"
+        # 광고·중복을 거르고도 num_results 를 채우도록 여유 있게 요청한다.
+        params: dict[str, str | int] = {"text": query, "limit": num_results * 3}
+        if settings.openserp_lang:
+            params["lang"] = settings.openserp_lang
+        try:
+            async with httpx.AsyncClient(timeout=settings.openserp_timeout) as client:
+                response = await client.get(endpoint, params=params)
+        except httpx.HTTPError as e:
+            logger.error(f"openserp request failed ({endpoint}): {e}")
+            return []
+
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if response.status_code != 200:
+            detail = payload.get("message") if isinstance(payload, dict) else None
+            logger.warning(
+                f"openserp {engine} returned HTTP {response.status_code}: "
+                f"{detail or response.text[:200]}"
+            )
+            return []
+
+        links = _extract_result_links(payload, num_results)
+        if isinstance(payload, dict):
+            failed = (payload.get("meta") or {}).get("engines_failed")
+            if failed:
+                logger.info(f"openserp {engine}: engines_failed={failed}")
+        return links
+
+    async def _search_links_searxng(
+        self, query: str, num_results: int
+    ) -> list[str]:
+        """로컬 SearXNG JSON API(``/search?format=json``)로 검색.
+
+        SearXNG 설정에서 ``search.formats`` 에 json 이 켜져 있어야 한다. 서버 주소는
+        운영자가 지정한 값이라 사설 IP 를 허용하고, 결과 URL 은 다른 엔진과 동일하게
+        search_and_scrape 에서 SSRF 검증을 거친다.
+        """
+        endpoint = f"{settings.searxng_base_url.rstrip('/')}/search"
+        params: dict[str, str] = {"q": query, "format": "json"}
+        if settings.searxng_language:
+            params["language"] = settings.searxng_language
+        try:
+            async with httpx.AsyncClient(timeout=settings.searxng_timeout) as client:
+                response = await client.get(endpoint, params=params)
+        except httpx.HTTPError as e:
+            logger.error(f"SearXNG request failed ({endpoint}): {e}")
+            return []
+        if response.status_code != 200:
+            logger.warning(
+                f"SearXNG returned HTTP {response.status_code}: {response.text[:200]}"
+            )
+            return []
+        try:
+            payload = response.json()
+        except ValueError:
+            logger.warning("SearXNG returned non-JSON (is format=json enabled?)")
+            return []
+        return _extract_result_links(payload, num_results)

@@ -1,0 +1,36 @@
+{
+  "include": [
+    {
+      "id": "search_the_web",
+      "desc": "Explicit web as the target: search the web / google it online / look up on the internet",
+      "pattern": "\\b(search|google|look\\s*up|lookup|browse|check)\\b[^.?!]{0,40}\\b(the\\s+)?(web|internet|online|google)\\b"
+    },
+    {
+      "id": "imperative_search",
+      "desc": "Imperative search request at sentence start or after a politeness marker",
+      "pattern": "(^|[.!?]\\s+|\\b(please|pls|can\\s+you|could\\s+you|would\\s+you|go\\s+and|go)\\s+)(search|google|look\\s*up)\\b"
+    },
+    {
+      "id": "look_it_up",
+      "desc": "look it up / search it up",
+      "pattern": "\\b(look|search)\\s+(it|this|that|them)\\s+up\\b"
+    },
+    {
+      "id": "web_search_noun",
+      "desc": "do a web search / run an internet search",
+      "pattern": "\\b(web|internet|online|google)\\s+search\\b"
+    }
+  ],
+  "exclude": [
+    {
+      "id": "search_as_feature",
+      "desc": "Search as something to build or explain (engine, algorithm, bar, API ...)",
+      "pattern": "\\bsearch\\s+(engine|algorithm|function|method|bar|box|field|api|endpoint|index|indexing|query\\s+builder|component|feature|logic|service|page\\s+ui)s?\\b"
+    },
+    {
+      "id": "search_algorithm",
+      "desc": "Data-structure / algorithm search terms",
+      "pattern": "\\b(binary|linear|depth[- ]first|breadth[- ]first|dfs|bfs|full[- ]text|fuzzy|vector|semantic)\\s+search\\b|\\b(elasticsearch|opensearch|meilisearch)\\b"
+    }
+  ]
+}
