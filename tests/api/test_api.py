@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 # Import app from main.py directly
 import main
 from src.api.v1.dependencies import get_gateway
-from src.core.exceptions import ResourceExhaustedError
+from src.core.exceptions import RateLimitError, ResourceExhaustedError
 from src.domain.models import ChatChoice, ChatMessage, ChatRequest, ChatResponse
 from src.services.gateway import Gateway
 
@@ -183,6 +183,70 @@ class TestAPI:
 
         assert response.status_code == 503
         assert "All providers exhausted" in response.json()["detail"]
+        assert "Retry-After" not in response.headers  # retry_after 모르면 헤더 생략
+
+    @pytest.mark.asyncio
+    async def test_gateway_circuit_open_sets_retry_after_header(self):
+        """Circuit OPEN 거부(strict, retry_after 동반)는 503 + Retry-After 헤더로
+        남은 복구 시간을 알려줘야 한다(item 2)."""
+        self.mock_gateway.process_request.side_effect = ResourceExhaustedError(
+            "Strict provider groq is currently unavailable (Circuit OPEN)",
+            retry_after=42.0,
+        )
+
+        request_data = ChatRequest(
+            model="groq/openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Hello"}],
+            temperature=0.7,
+        )
+
+        response = self.client.post(
+            "/v1/chat/completions", json=request_data.model_dump()
+        )
+
+        assert response.status_code == 503
+        assert response.headers["Retry-After"] == "42"
+
+    @pytest.mark.asyncio
+    async def test_gateway_rate_limit_returns_429_with_retry_after(self):
+        """429(레이트리밋)가 strict 재-raise 로 올라오면 500 이 아니라 HTTP 429 +
+        Retry-After(공급자 값)로 응답해야 한다(실측 사고: 이전엔 endpoints.py 의
+        except 에 RateLimitError 가 없어 일반 500 으로 떨어졌다)."""
+        self.mock_gateway.process_request.side_effect = RateLimitError(
+            "429 rate limit", retry_after=15.0
+        )
+
+        request_data = ChatRequest(
+            model="groq/openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Hello"}],
+            temperature=0.7,
+        )
+
+        response = self.client.post(
+            "/v1/chat/completions", json=request_data.model_dump()
+        )
+
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "15"
+
+    @pytest.mark.asyncio
+    async def test_gateway_rate_limit_without_provider_value_uses_computed_default(self):
+        """공급자가 Retry-After 를 안 알려줘도(retry_after=None) 429 응답엔 계산값
+        (분당 한도 기준 60s)으로 헤더를 채운다 — 헤더 자체가 없어지면 안 된다."""
+        self.mock_gateway.process_request.side_effect = RateLimitError("429 rate limit")
+
+        request_data = ChatRequest(
+            model="groq/openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Hello"}],
+            temperature=0.7,
+        )
+
+        response = self.client.post(
+            "/v1/chat/completions", json=request_data.model_dump()
+        )
+
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "60"
 
     @pytest.mark.asyncio
     async def test_gateway_internal_error(self):

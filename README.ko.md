@@ -51,6 +51,7 @@
 8. **통합 관리 UI** — `/ui`에서 playground, dashboard, 키 상태, 모델 카탈로그를 하나의 SPA로 제공하며, 모든 fetch 호출은 프록시 안정성을 위해 절대 URL을 사용합니다.
 9. **OpenAI API 호환** — 스트리밍 SSE(`chat.completion.chunk` + `[DONE]`) 포함 `/v1/chat/completions`.
 10. **웹 의도 키워드 점진 학습** — `services/keyword_store.py::KeywordStore`가 언어별(`ko`, `en`) 키워드를 JSON 파일(`data/web_keywords.{lang}.json`)로 영속화하고, `services/intent_classifier.py::IntentClassifier`가 임베딩 비교에 앞서 부분 문자열 매치를 수행합니다. `scripts/validate_flow.py`가 false negative 질의를 자동으로 `/v1/admin/intent/keywords/learn` 에 기록해 사전을 키워 나갑니다.
+    - **정규식 검색 의도 판정** — 키워드에 안 걸리면 `data/web_patterns.{ko,en}.json`의 정규식을 검사합니다. `include`(검색해서/검색 좀 해줘/인터넷에서 찾아봐/search the web/look it up 등 *검색 요청* 동사형)가 맞아도 `exclude`(검색 기능 구현, 검색 엔진 설명, 이진 탐색, binary search 등 *검색이 주제*인 문장)가 맞으면 무효입니다. 한국어 문장 속 영어 `search`도 잡도록 두 언어 패턴을 함께 적용합니다. 패턴은 JSON에서 `{"id", "desc", "pattern"}` 형식으로 편집하고 서버를 재시작하면 반영되며, 잘못된 정규식은 경고 로그와 함께 건너뜁니다. 매치 시 판정 근거는 `regex:<lang>:<id>`로 남습니다.
 
 ## API 표면
 
@@ -177,8 +178,107 @@ powershell -ExecutionPolicy Bypass -File scripts/isolated_test.ps1   # 한글 Wi
 - **기능 플래그** — `ENABLE_CONTEXT_COMPRESSION`, `ENABLE_AUTO_WEB_FETCH`, `WEB_CACHE_TTL_HOURS`
 - **관리자** — `ADMIN_API_KEY` (선택; 미설정 시 관리자 인증 비활성화)
 - **웹 의도 키워드 저장소** — `DATA_DIR`(기본 `data/`), `KEYWORD_EXTRACTION_MODEL`(Ollama 소형 LLM명; 미지정 시 정규식 폴백만 사용)
+- **웹 검색 엔진** — `SEARCH_PROVIDERS`(기본 `duckduckgo,bing`), `OPENSERP_*`, `SEARXNG_*` (아래 [웹 검색 엔진 선택](#웹-검색-엔진-선택-openserp-옵션) 참고)
+- **웹 백엔드** — `WEB_BACKEND`(기본 `inprocess`), `SEARCH_MCP_URL`, `SEARCH_MCP_TIMEOUT`, `SEARCH_MCP_FALLBACK`, `SEARCH_MCP_TOKEN` (아래 [검색 MCP 서버](#검색-mcp-서버-web_backendmcp) 참고)
 
 전체 예시는 `.env.example`을 참고하세요. `.env`는 `.gitignore`에 포함되어 저장소에 커밋되지 않습니다.
+
+### 웹 검색 엔진 선택 (openserp 옵션)
+
+웹 의도가 감지된 요청은 검색 엔진으로 링크를 찾은 뒤 상위 페이지 본문을 스크래핑해 프롬프트에 주입합니다. 사용할 엔진과 순서는 `SEARCH_PROVIDERS`로 정하며, 앞 엔진이 0건이면 다음 엔진으로 넘어갑니다.
+
+| 값 | 방식 | 비고 |
+|---|---|---|
+| `duckduckgo` | DuckDuckGo HTML 직접 스크래핑 | 기본 체인 1순위. HTML 구조 변경 시 0건이 될 수 있음 |
+| `bing` | Bing HTML 직접 스크래핑 | 기본 체인 2순위 |
+| `openserp` | 로컬 [openserp](https://github.com/karust/openserp) 서버 API 호출 | 선택. 별도 서버 필요 |
+| `searxng` | 로컬 [SearXNG](https://github.com/searxng/searxng) JSON API 호출 | 선택. 별도 서버 필요, `settings.yml`의 `search.formats`에 `json` 필요 |
+
+**기본값(`duckduckgo,bing`)은 기존 동작과 동일**하므로 아무것도 바꾸지 않으면 그대로 동작합니다.
+
+#### openserp 사용 방법
+
+1. openserp 서버를 띄웁니다(설치는 openserp 저장소 안내 참고).
+   ```bash
+   openserp serve -a 127.0.0.1 -p 7000
+   ```
+2. `.env`에서 검색 체인을 바꿉니다.
+   ```env
+   SEARCH_PROVIDERS=openserp,bing
+   OPENSERP_BASE_URL=http://127.0.0.1:7000
+   OPENSERP_ENGINE=duck      # google | bing | duck | yandex | baidu | mega
+   OPENSERP_LANG=KO          # 비워두면 openserp 기본값
+   OPENSERP_TIMEOUT=30       # 초
+   ```
+3. 서버를 재시작합니다. 서버 로그에 `Search engine 'openserp' returned N links`가 보이면 적용된 것입니다.
+
+- **엔진 권장값은 `duck`** 입니다. `mega`는 여러 엔진을 섞어 baidu 등 언어가 맞지 않는 결과가 상위에 오기 쉽고, google·yandex는 차단(429/캡차)되는 경우가 많습니다. `OPENSERP_ENGINE=bing`은 기존 `bing`과 결과가 거의 같아 이점이 없습니다.
+- openserp 서버가 꺼져 있으면 즉시(약 0.03초) 다음 엔진으로 폴백하므로 요청이 실패하지는 않습니다.
+- openserp가 돌려준 결과 URL도 다른 엔진과 동일하게 SSRF(사설 IP 차단) 검증을 거칩니다. `OPENSERP_BASE_URL` 자체는 운영자가 지정한 값이므로 로컬 주소를 허용합니다.
+
+#### 기존 방식 대비 비교 (2026-10-13 실측, 질의 6건)
+
+| 항목 | 기존 (`duckduckgo,bing`) | openserp (`duck`) |
+|---|---|---|
+| 관련 결과 | 1/6 (DDG는 파서 고장으로 매번 0건 → Bing 폴백) | 6/6 |
+| 문장형 질의 ("…검색해서 … 알려줘") | 링크모음·포털 메인 등 무관 결과 | 관련 결과 |
+| 1건 지연 | Bing 약 1.0초 (DDG 0건 낭비 약 1.7초 별도) | 약 1.8~2.0초 |
+| 동시 10건 | — | 10/10 성공, 총 약 9초 (내부적으로 거의 순차 처리) |
+| 운영 | 추가 구성요소 없음 | openserp 서버 별도 운영 필요 |
+
+검색 결과 링크만 바뀌며, 페이지 본문 추출(JS 전용 페이지·PDF는 본문이 비는 문제)과 웹 캐시(`WEB_CACHE_TTL_HOURS`) 동작은 엔진과 무관하게 동일합니다. 엔진을 바꾼 직후에도 이전에 캐시된 질의는 캐시 만료 전까지 이전 결과가 쓰입니다.
+
+#### SearXNG 사용
+
+```env
+SEARCH_PROVIDERS=openserp,searxng,bing
+SEARXNG_BASE_URL=http://127.0.0.1:8890
+SEARXNG_LANGUAGE=ko        # 비워두면 SearXNG 기본값
+SEARXNG_TIMEOUT=30
+```
+
+SearXNG는 여러 엔진의 결과를 모아 주므로 openserp의 일부 엔진이 차단될 때 보완 엔진으로 쓰기 좋습니다(실측 0.85~1.7초, 질의당 27~42건).
+
+### 검색 MCP 서버 (WEB_BACKEND=mcp)
+
+웹 검색·본문 추출을 게이트웨이 내부가 아니라 별도 프로세스의 **검색 MCP 서버**(`search_mcp/server.py`)에서 수행하게 할 수 있습니다.
+
+```
+기본 (WEB_BACKEND=inprocess):  게이트웨이 ──▶ WebScraper ──▶ duckduckgo / bing / openserp / searxng
+MCP  (WEB_BACKEND=mcp):        게이트웨이 ──(MCP)──▶ 검색 MCP 서버(WebScraper) ──▶ 같은 엔진들
+```
+
+- **기본값은 `inprocess`로 기존 동작과 같습니다.** `WEB_BACKEND=mcp`로 바꿨을 때만 MCP 서버를 씁니다.
+- **LLM 호출 횟수는 그대로입니다.** 검색 여부는 게이트웨이가 판정하고, MCP 도구는 정해진 순서로 직접 호출합니다. 실측 기준으로 MCP 경유에 따른 지연 증가는 사실상 없습니다(같은 openserp 기준 MCP 1.81초 대 HTTP 직접 1.92초).
+- **장점**: 브라우저(Playwright)가 게이트웨이 밖에서 돌고, 검색 쪽만 따로 고치거나 재시작할 수 있으며, 같은 서버를 Claude Code 등 다른 MCP 클라이언트에서도 쓸 수 있습니다.
+- **엔진 선택**: MCP 모드에서는 MCP 서버가 읽는 `.env`의 `SEARCH_PROVIDERS`가 적용됩니다. 서버는 프로젝트 루트의 `.env`를 같이 씁니다.
+- **장애 대응**: MCP 서버가 꺼져 있어도 게이트웨이는 기동합니다. 호출 실패 시 `SEARCH_MCP_FALLBACK=true`(기본)이면 게이트웨이 내장 스크래퍼로 대신 처리합니다.
+- **설치 주의**: 공식 MCP SDK는 `anyio>=4`가 필요해 게이트웨이 venv(FastAPI 0.104, `anyio<4`)에 설치할 수 없습니다. 서버는 **별도 venv**(`search_mcp/.venv`)에서 실행합니다. 게이트웨이 쪽은 추가 설치 없이 기존 `httpx`로 MCP 클라이언트를 구현했습니다.
+
+빠른 시작:
+
+```bash
+# 1) 서버 venv 준비 (최초 1회)
+python3 -m venv search_mcp/.venv
+search_mcp/.venv/bin/pip install -r search_mcp/requirements.txt
+
+# 2) 서버 실행 (기본 http://127.0.0.1:8790/mcp)
+search_mcp/.venv/bin/python search_mcp/server.py
+
+# 3) .env 에서 WEB_BACKEND=mcp 로 바꾸고 게이트웨이 재시작
+python main.py
+```
+
+| 설정 | 기본값 | 설명 |
+|---|---|---|
+| `WEB_BACKEND` | `inprocess` | `inprocess` 또는 `mcp` |
+| `SEARCH_MCP_URL` | `http://127.0.0.1:8790/mcp` | 검색 MCP 서버 주소 |
+| `SEARCH_MCP_TIMEOUT` | `75` | MCP 호출 최대 대기(초). 전체 요청 마감(`REQUEST_DEADLINE_SECONDS`=90)보다 짧게 |
+| `SEARCH_MCP_FALLBACK` | `true` | MCP 실패 시 내장 스크래퍼로 대신 수행 |
+| `SEARCH_MCP_TOKEN` | (빈 값) | 설정 시 서버·게이트웨이가 Bearer 토큰으로 인증 |
+| `SEARCH_MCP_HOST` / `SEARCH_MCP_PORT` | `127.0.0.1` / `8790` | 서버 바인드 주소 |
+
+적용 확인: 게이트웨이 로그에 `Web backend: search MCP server (...)`, `Search MCP connected: tools=[...]`가 찍히고, 요청마다 `Search MCP search_and_fetch: N chars in Xs`가 남습니다. 도구 목록, 보안, Claude Code 연결 방법은 [`search_mcp/README.ko.md`](search_mcp/README.ko.md)를 참고하세요.
 
 ### 시크릿 취급 주의
 

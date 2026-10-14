@@ -10,6 +10,32 @@ from src.i18n import t
 
 logger = logging.getLogger(__name__)
 
+# provider 접두사 없이 "vendor/model"(Groq 실측 네이밍) 또는 bare 모델명(Cerebras 실측
+# 네이밍)을 explicit 모델 힌트로 줄 때 provider 를 확정하기 위한 최소 보조표
+# (2026-10 실측 /models 기준). 권위 있는 소스는 discover_models() 로 채워지는
+# ContextAnalyzer._dynamic_targets(동적 레지스트리) 이고, 이 표는 그게 아직 없는
+# 콜드스타트/테스트 환경을 위한 보조일 뿐이라 꼭 필요한 것만 둔다 — 하드코딩을
+# 늘리려는 목적이 아니다. _get_target_for_model() 의 동적 레지스트리 체크 "다음"에만
+# 참조되므로, 실제 /models 탐색 결과가 항상 우선한다.
+_KNOWN_MODEL_PROVIDERS: dict[str, ProviderType] = {
+    "openai/gpt-oss-120b": ProviderType.GROQ,
+    "openai/gpt-oss-20b": ProviderType.GROQ,
+    "qwen/qwen3.8-27b": ProviderType.GROQ,
+    "allam-2-7b": ProviderType.GROQ,
+    "gpt-oss-120b": ProviderType.CEREBRAS,
+    "qwen-3.8-27b": ProviderType.CEREBRAS,
+}
+
+# 같은 모델을 공급자마다 다른 이름(vendor/model vs bare)으로 부르는 경우의 매핑. 413
+# 등으로 provider 를 전환할 때 "다른 모델"이 아니라 "같은 모델을 다른 공급자 이름으로"
+# 보내기 위해 쓴다(실측: Groq openai/gpt-oss-120b ↔ Cerebras gpt-oss-120b). 매핑이 없는
+# 조합(예: Groq 전용 openai/gpt-oss-20b·allam-2-7b 를 Cerebras 로)은 호출부가
+# get_default_model_for_provider() 로 대체한다.
+_MODEL_EQUIVALENTS: tuple[dict[ProviderType, str], ...] = (
+    {ProviderType.GROQ: "openai/gpt-oss-120b", ProviderType.CEREBRAS: "gpt-oss-120b"},
+    {ProviderType.GROQ: "qwen/qwen3.8-27b", ProviderType.CEREBRAS: "qwen-3.8-27b"},
+)
+
 
 class ContextAnalyzer(IContextAnalyzer):
     def __init__(self, max_tokens_fast_model: int = 8192):
@@ -166,8 +192,22 @@ class ContextAnalyzer(IContextAnalyzer):
                     confidence=1.0,
                     web_search_required=False,
                 )
+
+            elif self._is_known_model_id(model_hint):
+                # provider 접두사가 아니라 "vendor/model" 형태의 실제 모델명(예:
+                # openai/gpt-oss-120b, qwen/qwen3.8-27b) — 탐색된 /models 목록(동적
+                # 레지스트리, 우선) 또는 최소 실측 보조표로 provider 를 가려낸다.
+                requested_model = model_hint
         else:
             requested_model = self._parse_model_hint(model_hint)
+            if (
+                requested_model is None
+                and model_hint not in ("auto", "default", "opencode", "openclaw")
+                and self._is_known_model_id(model_hint)
+            ):
+                # provider 접두사 없는 bare 모델명(예: Cerebras 실측 네이밍
+                # gpt-oss-120b, qwen-3.8-27b)도 같은 방식으로 처리.
+                requested_model = model_hint
 
         web_required = self.detect_web_intent(request)
         estimated_tokens = request.estimate_token_count()
@@ -315,6 +355,17 @@ class ContextAnalyzer(IContextAnalyzer):
 
         return self._model_mapping.get(model_hint)
 
+    def _is_known_model_id(self, model_hint: str) -> bool:
+        """model_hint 가 provider 를 확정할 수 있는 실제 모델명인지.
+
+        권위 있는 소스는 discover_models() 로 채워지는 _dynamic_targets(실측 /models,
+        우선)이고, 아직 탐색이 안 된 콜드스타트/테스트 환경에서는 _KNOWN_MODEL_PROVIDERS
+        최소 보조표로 대체한다. 둘 다 없으면 False — 이 경우 호출부는 기존처럼 generic
+        auto 라우팅/패턴 매칭으로 넘어간다(회귀 없음)."""
+        if hasattr(self, "_dynamic_targets") and model_hint in self._dynamic_targets:
+            return True
+        return model_hint in _KNOWN_MODEL_PROVIDERS
+
     def _determine_strategy(
         self,
         estimated_tokens: int,
@@ -354,13 +405,19 @@ class ContextAnalyzer(IContextAnalyzer):
             elif preferred_provider == ProviderType.GROQ:
                 return {
                     "provider": ProviderType.GROQ,
-                    "model": ModelType.GROQ_LLAMA_3_3_70B,
+                    # GROQ_LLAMA_3_3_70B("llama-3.3-70b-versatile")는 Groq 에 더 이상
+                    # 없는 모델명(실측 404) — 실측 가용한 GPT_OSS_120B 사용(어댑터가
+                    # /models 탐색으로 추가 검증·대체).
+                    "model": ModelType.GROQ_GPT_OSS_120B,
                     "reason": RoutingReason.MODEL_HINT.value,
                 }
             elif preferred_provider == ProviderType.CEREBRAS:
                 return {
                     "provider": ProviderType.CEREBRAS,
-                    "model": ModelType.CEREBRAS_LLAMA,
+                    # CEREBRAS_LLAMA("llama")는 Cerebras 에 존재하지 않는 모델명이라 보내면
+                    # 404 가 난다 — 실측 가용한 GPT_OSS_120B 를 기본으로 쓴다(어댑터가 /models
+                    # 탐색으로 추가 검증·대체).
+                    "model": ModelType.CEREBRAS_GPT_OSS_120B,
                     "reason": RoutingReason.MODEL_HINT.value,
                 }
 
@@ -390,13 +447,16 @@ class ContextAnalyzer(IContextAnalyzer):
             if fast == ProviderType.GROQ:
                 return {
                     "provider": ProviderType.GROQ,
-                    "model": ModelType.GROQ_LLAMA_3_3_70B,
+                    # 위와 동일한 이유로 존재하지 않는 llama-3.3-70b-versatile 대신
+                    # 실측 가용 모델 사용.
+                    "model": ModelType.GROQ_GPT_OSS_120B,
                     "reason": RoutingReason.TOKEN_COUNT.value,
                 }
             if fast == ProviderType.CEREBRAS:
                 return {
                     "provider": ProviderType.CEREBRAS,
-                    "model": ModelType.CEREBRAS_LLAMA,
+                    # 위와 동일한 이유로 존재하지 않는 "llama" 대신 실측 가용 모델 사용.
+                    "model": ModelType.CEREBRAS_GPT_OSS_120B,
                     "reason": RoutingReason.TOKEN_COUNT.value,
                 }
 
@@ -416,7 +476,7 @@ class ContextAnalyzer(IContextAnalyzer):
 
             return {
                 "provider": ProviderType.GROQ,
-                "model": ModelType.GROQ_LLAMA_3_3_70B,
+                "model": ModelType.GROQ_GPT_OSS_120B,
                 "reason": RoutingReason.TOKEN_COUNT.value,
             }
         else:
@@ -457,13 +517,43 @@ class ContextAnalyzer(IContextAnalyzer):
         if provider == ProviderType.GEMINI:
             return self._default_free_model
         elif provider == ProviderType.GROQ:
-            return "llama-3.3-70b-versatile"
+            # "llama-3.3-70b-versatile"는 Groq 에 더 이상 없는 모델명(실측 404) —
+            # resilience_manager 가 provider 를 Groq 로 전환할 때 이 값을
+            # request.model 로 꽂아 보내므로, 실측 가용한 openai/gpt-oss-120b 를 쓴다
+            # (OpenAICompatAdapter 는 /models 탐색으로 추가 검증·대체도 한다).
+            return ModelType.GROQ_GPT_OSS_120B.value
         else:
-            return "llama3.1-70b"
+            # ProviderType.CEREBRAS. "llama3.1-70b"는 Cerebras 에 더 이상 없는 모델명
+            # (실측 404) — resilience_manager 가 provider 를 Cerebras 로 전환할 때 이
+            # 값을 request.model 로 꽂아 보내므로, 실측 가용한 gpt-oss-120b 를 쓴다
+            # (CerebrasAdapter 는 /models 탐색으로 추가 검증·대체도 한다).
+            return ModelType.CEREBRAS_GPT_OSS_120B.value
 
     def get_default_model_for_provider(self, provider: ProviderType) -> str:
         # gateway fallback 루프에서 호출하는 공용 API.
         return self._get_default_model_for_provider(provider)
+
+    def get_equivalent_model_for_provider(
+        self,
+        current_model: str | None,
+        current_provider: ProviderType | None,
+        target_provider: ProviderType,
+    ) -> str:
+        """provider 전환(예: 413 → 더 큰 한도 공급자) 시 "다른 모델"이 아니라 "같은
+        모델을 다른 공급자 이름으로" 보내기 위한 변환.
+
+        실측(2026-10): Groq "openai/gpt-oss-120b" 와 Cerebras "gpt-oss-120b" 는 같은
+        모델이다. _MODEL_EQUIVALENTS 에 등록된 조합이면 그 이름으로, 등록되지 않은
+        조합(예: Groq 전용 openai/gpt-oss-20b·allam-2-7b 를 Cerebras 로 전환)이면
+        해당 공급자의 기본 모델로 대체한다(완전 동일 모델이 없는 경우의 최선책 —
+        기존 get_default_model_for_provider 와 동일한 폴백).
+        """
+        cm = (current_model or "").lower()
+        if current_provider is not None:
+            for row in _MODEL_EQUIVALENTS:
+                if row.get(current_provider) == cm and target_provider in row:
+                    return row[target_provider]
+        return self._get_default_model_for_provider(target_provider)
 
     def _get_target_for_model(self, model: ModelType | str) -> ProviderType | AgentType:
         """
@@ -493,6 +583,12 @@ class ContextAnalyzer(IContextAnalyzer):
                 return self._dynamic_targets[clean_id]
             if model_id in self._dynamic_targets:
                 return self._dynamic_targets[model_id]
+
+        # 2b. 동적 탐색이 아직 없을 때의 최소 실측 보조표(_KNOWN_MODEL_PROVIDERS) —
+        # 예: Groq "openai/gpt-oss-120b"·"qwen/qwen3.8-27b"·"allam-2-7b", Cerebras
+        # bare "gpt-oss-120b"·"qwen-3.8-27b". discover_models() 결과(2단계)가 항상 우선.
+        if work_id in _KNOWN_MODEL_PROVIDERS:
+            return _KNOWN_MODEL_PROVIDERS[work_id]
 
         # 3. Explicit provider/agent prefix handling (e.g. 'gemini/custom-model')
         if "/" in model_id:

@@ -112,9 +112,15 @@ class KeyManager(IKeyManager):
         # 휴리스틱으로 보강한다(타입이 누락돼도 안전하게 동작).
         category = getattr(error, "category", None)
         error_msg = str(error).lower()
+        # 402(결제/빌링 문제)도 403 과 동일하게 다룬다 — 시간이 지나도 저절로 풀리지
+        # 않는 계정 설정 문제라 재시도해도 안 풀린다(실측: Cerebras 키가 /models 는
+        # 정상인데 chat completions 는 402 "Payment required ... billing tab").
         is_forbidden = (
             category == ErrorCategory.AUTH_FAILURE
+            or category == ErrorCategory.PAYMENT_REQUIRED
             or "403" in error_msg
+            or "402" in error_msg
+            or "payment required" in error_msg
             or "denied" in error_msg
             or "forbidden" in error_msg
         )
@@ -132,10 +138,22 @@ class KeyManager(IKeyManager):
                     self._failed_keys[provider] = []
                 self._failed_keys[provider].append(api_key)
 
+                # 429(쿼터/레이트리밋)는 공급자가 직접 알려준 Retry-After 가 있으면
+                # 그 값을 쿨다운으로 쓴다(실측: Groq 분당 토큰 한도 — 공급자는 보통
+                # 60s 안쪽으로 짧게 돌아오는데, 고정 1h 로 묶으면 실제보다 훨씬 길게
+                # 키를 묵혀 불필요한 가용 키 감소를 유발한다). 구조화된 값이 없으면
+                # 메시지 본문의 retryDelay 파싱 → 그래도 없으면 보수적 기본값(1h).
+                retry_after = getattr(error, "retry_after", None)
+                rd = re.search(r"retry[_-]?delay['\":\s]*?(\d+)", error_msg)
                 if is_forbidden:
                     cooldown_seconds = 86400
                 elif is_quota_error:
-                    cooldown_seconds = 3600
+                    if retry_after is not None and retry_after > 0:
+                        cooldown_seconds = max(1, int(retry_after))
+                    elif rd:
+                        cooldown_seconds = max(1, int(rd.group(1)))
+                    else:
+                        cooldown_seconds = 3600
                 else:
                     cooldown_seconds = int(self.cooldown_period.total_seconds())
 
@@ -145,14 +163,27 @@ class KeyManager(IKeyManager):
                     "is_quota_limit": is_quota_error,
                     "is_forbidden": is_forbidden,
                     "cooldown_until": time.time() + cooldown_seconds,
+                    # 403/forbidden(예: Gemini "project has been denied access")은
+                    # 시간이 지나도 저절로 풀리지 않는 프로젝트/계정 설정 문제다. 24h
+                    # 쿨다운이 지나도 recovery_task(60s 폴링)가 재프로브하지 않도록
+                    # 영구 제외 플래그를 둔다(실측: 403 키가 요청마다/주기마다 재시도돼
+                    # 컨텍스트 업로드를 반복 시도했다). 쿼터(429)는 시간이 지나면 풀리는
+                    # 정상 상태라 영구 제외 대상이 아니다.
+                    "permanently_excluded": is_forbidden,
                 }
                 if is_quota_error:
-                    # 429 응답에서 retryDelay(초) 와 quotaId 를 best-effort 파싱한다.
-                    rd = re.search(r"retry[_-]?delay['\":\s]*?(\d+)", error_msg)
+                    # quotaId 는 여전히 메시지에서만 얻을 수 있어 best-effort 파싱 유지.
                     qid = re.search(r"quota(?:id|metric)['\":\s]*?([a-z0-9_-]{6,})", error_msg)
                     meta_update["last_429"] = {
                         "ts": time.time(),
-                        "retry_delay": int(rd.group(1)) if rd else None,
+                        "retry_delay": (
+                            int(retry_after)
+                            if retry_after is not None and retry_after > 0
+                            else (int(rd.group(1)) if rd else None)
+                        ),
+                        "retry_after_source": "provider" if retry_after else (
+                            "message" if rd else None
+                        ),
                         "quota_id": qid.group(1) if qid else None,
                     }
                 self.update_key_metadata(provider, api_key, meta_update)
@@ -166,6 +197,15 @@ class KeyManager(IKeyManager):
     def get_active_keys(self, provider: ProviderType) -> list[str]:
         """활성 키 사본 반환(실측 probe 순회용)."""
         return list(self._active_keys.get(provider, []))
+
+    def is_permanently_excluded(self, provider: ProviderType, api_key: str) -> bool:
+        """403/forbidden 으로 실패해 영구 제외된 키인지 — recovery_task 가 이 키를
+        다시 활성 풀에 되돌리지 않도록 gateway._recover_failed_keys_impl 에서 쓴다."""
+        return bool(
+            self._key_metadata.get(provider, {}).get(api_key, {}).get(
+                "permanently_excluded"
+            )
+        )
 
     def _record_quota_usage(self, provider: ProviderType, key: str) -> None:
         """선택된 키의 분/일(PT) 요청 카운터를 갱신한다(버킷 경계 넘으면 리셋)."""

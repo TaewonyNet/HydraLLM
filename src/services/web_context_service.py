@@ -5,13 +5,13 @@ import time
 from typing import Any, cast
 
 from src.core.config import settings
-from src.domain.interfaces import ISessionManager
+from src.domain.interfaces import ISessionManager, IWebScraper
 from src.domain.models import ChatRequest
 from src.i18n import t
 from src.services.analyzer import ContextAnalyzer
 from src.services.compressor import ContextCompressor
 from src.services.intent_classifier import IntentClassifier
-from src.services.scraper import ScrapeMode, WebScraper
+from src.services.scraper import ScrapeMode
 
 logger = logging.getLogger(__name__)
 _URL_PATTERN = re.compile(r"https?://[^\s()<>]+")
@@ -21,7 +21,7 @@ class WebContextService:
     def __init__(
         self,
         analyzer: ContextAnalyzer,
-        scraper: WebScraper,
+        scraper: IWebScraper,
         compressor: ContextCompressor,
         session_manager: ISessionManager,
         intent_classifier: IntentClassifier | None = None,
@@ -41,6 +41,13 @@ class WebContextService:
             else settings.enable_auto_web_fetch
         )
 
+        # auto_web_fetch=False 는 "자동 탐지"뿐 아니라 어떤 웹 검색·수집도 하지 않는다는
+        # 뜻이다(실측: 과거엔 has_url/dynamic_keywords 판정이 do_auto_fetch 와 무관하게
+        # 돌아, false 로 꺼도 본문 일부로 DDG·Bing 검색을 시도했다). 여기서 완전히
+        # 차단해 analyzer.detect_web_intent 호출·URL 추출·검색/스크레이핑을 전부 건너뛴다.
+        if not do_auto_fetch:
+            return [], None
+
         content_text = self._extract_user_content(request)
         clean_query = self._sanitize_query(content_text)
 
@@ -51,12 +58,10 @@ class WebContextService:
             urls_to_fetch.append(request.web_fetch)
 
         web_required = has_url
-        if (
-            not web_required
-            and do_auto_fetch
-            and self.intent_classifier
-            and self.intent_classifier.is_ready
-        ):
+        # is_ready(임베딩 준비) 로 막지 않는다: needs_web_search 는 키워드·정규식 판정을
+        # 먼저 하고, 임베딩이 준비 안 됐으면 그 단계만 건너뛴다(실측: Ollama 임베딩 초기화
+        # 실패 시 "검색해서 …" 같은 명시적 요청까지 웹 보강이 통째로 꺼졌다).
+        if not web_required and do_auto_fetch and self.intent_classifier:
             web_required = await self.intent_classifier.needs_web_search(clean_query)
 
         if not (web_required or urls_to_fetch):

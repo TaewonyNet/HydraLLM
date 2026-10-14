@@ -40,6 +40,100 @@ async def test_small_query_prefers_groq_fast():
 
 
 @pytest.mark.asyncio
+async def test_groq_routing_never_sends_stale_llama_3_3_70b_versatile():
+    """2026-10 실측: llama-3.3-70b-versatile 는 Groq /models 에 없다 — 어떤 Groq 라우팅
+    경로도 이 모델명을 보내면 안 된다(라운드로빈으로 여러 번 돌려 분산 경로도 커버)."""
+    for _ in range(10):
+        d = await _analyzer().analyze(_req("hi"), available_tiers=ALL_FREE)
+        if d.provider == ProviderType.GROQ:
+            assert d.model_name != "llama-3.3-70b-versatile"
+            assert d.model_name == "openai/gpt-oss-120b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "explicit_model,expected_provider",
+    [
+        # Groq 실측 네이밍(vendor/model, 2026-10): MovieSpoiler 수집기 v2 가 이 형태로
+        # 직접 보낸다 — provider 접두사가 없어도 explicit 모델 힌트로 strict 라우팅돼야
+        # 한다(회귀 가드: round-robin/auto 로 떨어져 모델이 바뀌면 안 됨).
+        ("openai/gpt-oss-120b", ProviderType.GROQ),
+        ("openai/gpt-oss-20b", ProviderType.GROQ),
+        ("qwen/qwen3.8-27b", ProviderType.GROQ),
+        ("allam-2-7b", ProviderType.GROQ),
+        # Cerebras 실측 네이밍(접두사 없는 bare 모델명, 2026-10).
+        ("gpt-oss-120b", ProviderType.CEREBRAS),
+        ("qwen-3.8-27b", ProviderType.CEREBRAS),
+    ],
+)
+async def test_explicit_vendor_model_name_routes_to_correct_provider(
+    explicit_model, expected_provider
+):
+    """provider 접두사 없는 실제 모델명을 그대로 요청하면, round-robin/auto 로 새지
+    않고 올바른 공급자로 explicit 라우팅되며 모델명도 그대로 보존된다."""
+    d = await _analyzer().analyze(_req("hi", model=explicit_model), available_tiers=ALL_FREE)
+    assert d.provider == expected_provider
+    assert d.model_name == explicit_model
+    assert d.reason == "model_hint"
+
+
+def test_known_model_providers_resolution_via_get_target_for_model():
+    """_get_target_for_model 이 동적 탐색 레지스트리가 없는 상태에서도(콜드스타트/단위
+    테스트) 최소 보조표로 Groq/Cerebras 를 올바르게 가린다."""
+    a = _analyzer()
+    assert a._get_target_for_model("openai/gpt-oss-120b") == ProviderType.GROQ
+    assert a._get_target_for_model("openai/gpt-oss-20b") == ProviderType.GROQ
+    assert a._get_target_for_model("qwen/qwen3.8-27b") == ProviderType.GROQ
+    assert a._get_target_for_model("allam-2-7b") == ProviderType.GROQ
+    assert a._get_target_for_model("gpt-oss-120b") == ProviderType.CEREBRAS
+    assert a._get_target_for_model("qwen-3.8-27b") == ProviderType.CEREBRAS
+
+
+def test_dynamic_registry_takes_priority_over_known_model_table():
+    """discover_models() 로 실제 탐색된 결과(_dynamic_targets)가 최소 보조표보다
+    우선해야 한다(요구사항: "가능하면 하드코딩 패턴보다 탐색된 /models 목록으로")."""
+    a = _analyzer()
+    # 보조표상 CEREBRAS 이지만, 실측 탐색 결과가 GROQ 로 등록돼 있다고 가정.
+    a.register_model("gpt-oss-120b", ProviderType.GROQ, {})
+    assert a._get_target_for_model("gpt-oss-120b") == ProviderType.GROQ
+
+
+def test_get_equivalent_model_for_provider_maps_known_pairs():
+    """413 등으로 provider 전환 시 같은 모델의 다른 공급자 이름으로 변환한다."""
+    a = _analyzer()
+    assert (
+        a.get_equivalent_model_for_provider(
+            "openai/gpt-oss-120b", ProviderType.GROQ, ProviderType.CEREBRAS
+        )
+        == "gpt-oss-120b"
+    )
+    assert (
+        a.get_equivalent_model_for_provider(
+            "qwen/qwen3.8-27b", ProviderType.GROQ, ProviderType.CEREBRAS
+        )
+        == "qwen-3.8-27b"
+    )
+    assert (
+        a.get_equivalent_model_for_provider(
+            "gpt-oss-120b", ProviderType.CEREBRAS, ProviderType.GROQ
+        )
+        == "openai/gpt-oss-120b"
+    )
+
+
+def test_get_equivalent_model_for_provider_falls_back_when_no_pair_known():
+    """동일 모델이 그 공급자에 없으면(예: Groq 전용 openai/gpt-oss-20b·allam-2-7b 를
+    Cerebras 로) 기본 모델로 대체한다(기존 get_default_model_for_provider 와 동일)."""
+    a = _analyzer()
+    assert a.get_equivalent_model_for_provider(
+        "openai/gpt-oss-20b", ProviderType.GROQ, ProviderType.CEREBRAS
+    ) == a.get_default_model_for_provider(ProviderType.CEREBRAS)
+    assert a.get_equivalent_model_for_provider(
+        "allam-2-7b", ProviderType.GROQ, ProviderType.CEREBRAS
+    ) == a.get_default_model_for_provider(ProviderType.CEREBRAS)
+
+
+@pytest.mark.asyncio
 async def test_small_query_falls_to_cerebras_when_no_groq():
     """Groq 키 없으면 Cerebras 로 fast tier."""
     tiers = {ProviderType.GEMINI: {"free"}, ProviderType.CEREBRAS: {"free"}}

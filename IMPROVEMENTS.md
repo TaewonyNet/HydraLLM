@@ -56,5 +56,12 @@ This document summarizes the strategic strengths and potential enhancement areas
 - **Robust Context Integration**: Moving beyond basic prompt injection towards more structured and resilient context anchoring techniques.
 - **Edge-Case Simulation**: Expanding the testing framework to include complex multi-failure scenarios and high-load stress testing.
 
+## 🔎 Web Search Extensions (2026-10-13)
+- **Engine chain**: `SEARCH_PROVIDERS` ordered fallback; openserp and SearXNG added as options (default unchanged: `duckduckgo,bing`).
+- **Regex intent**: `data/web_patterns.{ko,en}.json` include/exclude — catch search requests, skip sentences where search is the topic.
+- **Search MCP server**: standalone `search_mcp/server.py`; gateway `WEB_BACKEND=mcp` with in-process fallback.
+- **Provider errors**: Gemini 403 → per-key permanent exclusion (no circuit trip), 503 → short retry.
+- **Open item**: web enrichment is not covered by the 90s request deadline (131s observed on fallback).
+
 ---
-*Last Updated: 2026-04-02*
+*Last Updated: 2026-10-13*

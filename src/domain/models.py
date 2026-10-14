@@ -132,6 +132,21 @@ class ChatRequest(BaseModel):
         None, description="List of tools available"
     )
     tool_choice: str | dict[str, Any] | None = Field(None, description="Tool choice")
+    response_format: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "OpenAI 호환 응답 형식 지정(예: {'type': 'json_object'}). 실측(2026-10)으로 "
+            "지원이 확인된 공급자(Groq)에만 그대로 전달되고, 지원이 확인되지 않은 "
+            "공급자에는 보내지 않는다(모르는 필드를 보내 400 을 유발하지 않기 위함)."
+        ),
+    )
+    reasoning_effort: str | None = Field(
+        None,
+        description=(
+            "추론 강도('low'/'medium'/'high' 등, gpt-oss 계열 모델). 실측으로 지원이 "
+            "확인된 공급자(Groq)에만 그대로 전달된다."
+        ),
+    )
     fork_from: str | None = Field(
         None,
         description="특정 메시지 ID에서 세션을 분기. 새 세션이 생성되고 응답에 새 session_id 반환.",

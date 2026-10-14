@@ -11,9 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.adapters.web.mcp_search import McpWebScraper, StreamableHttpMcpClient
 from src.api.v1.endpoints import router as api_router
 from src.core.config import settings
 from src.core.logging import get_logger, setup_logging
+from src.domain.enums import ProviderType
+from src.domain.interfaces import IWebScraper
 from src.i18n import set_locale
 from src.services.analyzer import ContextAnalyzer
 from src.services.compressor import ContextCompressor
@@ -66,6 +69,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("🚀 Starting initial resource discovery and key probing...")
         try:
             await gateway.discover_all_models()
+            # Gemini 는 "project denied access"(403) 키가 흔하다(프로젝트 단위 영구
+            # 거부). 서빙 시작 전에 한 번 실측 probe 해 denied 키를 활성 풀에서 걸러내고
+            # (item 5: key_manager.report_failure → permanently_excluded) 첫 실제
+            # 요청이 그 키를 뽑아 403 → 폴백 체인을 타는 사고를 막는다. Groq/Cerebras는
+            # 이미 정상 동작이 확인돼 있어 불필요한 쿼터 소모를 피하려고 여기선 뺀다.
+            try:
+                await gateway.probe_active_keys(providers=(ProviderType.GEMINI,))
+            except Exception as pe:
+                logger.warning(f"Startup Gemini key probing failed (non-fatal): {pe}")
             await gateway.probe_all_keys()
             logger.info("✅ Background discovery and probing completed")
         except Exception as de:
@@ -93,6 +105,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await app.state.scraper.shutdown()
     if hasattr(app.state, "session_manager"):
         app.state.session_manager.close()
+
+
+def _build_web_scraper() -> IWebScraper:
+    """WEB_BACKEND 에 따라 웹 검색·본문 추출 구현을 고른다(기본 inprocess = 기존 동작)."""
+    backend = settings.web_backend.strip().lower()
+    if backend == "mcp":
+        logger.info(f"Web backend: search MCP server ({settings.search_mcp_url})")
+        client = StreamableHttpMcpClient(
+            settings.search_mcp_url,
+            timeout=settings.search_mcp_timeout,
+            token=settings.search_mcp_token,
+        )
+        fallback = WebScraper() if settings.search_mcp_fallback else None
+        return McpWebScraper(client, fallback=fallback)
+    if backend != "inprocess":
+        logger.warning(f"Unknown WEB_BACKEND '{settings.web_backend}', using inprocess")
+    return WebScraper()
 
 
 def create_app() -> FastAPI:
@@ -126,7 +155,7 @@ def create_app() -> FastAPI:
     analyzer = ContextAnalyzer(max_tokens_fast_model=settings.max_tokens_fast_model)
     key_manager = KeyManager()
     session_manager = SessionManager()
-    scraper = WebScraper()
+    scraper = _build_web_scraper()
     compressor = ContextCompressor()
     metrics_service = MetricsService(session_manager)
     admin_service = AdminService(session_manager)

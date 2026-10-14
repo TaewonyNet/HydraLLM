@@ -8,7 +8,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from src.core.exceptions import (
+    AuthenticationError,
+    GatewayTimeoutError,
     InvalidRequestError,
+    RateLimitError,
+    RequestTooLargeError,
     RequestValidationError,
     ResourceExhaustedError,
     ServiceUnavailableError,
@@ -96,10 +100,59 @@ async def chat_completion(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from e
-    except (ResourceExhaustedError, ServiceUnavailableError) as e:
+    except RateLimitError as e:
+        # 429(레이트리밋)는 공급자 장애가 아니라 그 키의 한도 문제(실측: Groq 분당
+        # 토큰 한도 — 같은 시각 직접 호출은 200). strict 모드라 resilience_manager 가
+        # 교차 폴백 없이 재-raise 한 경우 여기로 온다. HTTP 429 + Retry-After 로
+        # "언제 다시 시도하면 될지" 알려준다 — 공급자 값이 있으면 그 값, 없으면
+        # 분당 한도 기준 계산값(60s)으로 대체(과거엔 이 except 가 없어 500 으로
+        # 떨어졌다).
+        logger.error(f"Chat completion error: {e}")
+        retry_after = getattr(e, "retry_after", None)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(e),
+            headers={"Retry-After": str(max(1, int(retry_after or 60)))},
+        ) from e
+    except ResourceExhaustedError as e:
+        # Circuit OPEN 거부(strict) 등. retry_after 가 있으면(breaker 의 남은 복구
+        # 시간) Retry-After 헤더로 전달 — 없으면(예: 키 고갈) 헤더 생략.
+        logger.error(f"Chat completion error: {e}")
+        retry_after = getattr(e, "retry_after", None)
+        headers = {"Retry-After": str(max(1, int(retry_after)))} if retry_after else None
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+            headers=headers,
+        ) from e
+    except ServiceUnavailableError as e:
         logger.error(f"Chat completion error: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+        ) from e
+    except AuthenticationError as e:
+        # 키 단위 영구 거부(예: Gemini "project has been denied access") — strict
+        # 라우팅에서 교차 공급자 폴백 없이 재-raise 된 경우 여기로 온다. 공급자
+        # 장애(503)가 아니라 그 키/계정 문제이므로 403으로 그대로 전달한다.
+        logger.error(f"Chat completion error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        ) from e
+    except RequestTooLargeError as e:
+        # 413 은 키/계정 문제가 아니라 요청 크기 문제 — 더 큰 한도 공급자도 없으면
+        # 명확한 413 을 바로 돌려준다(Gemini 폴백 → 403 → 타임아웃 재발 방지).
+        logger.error(f"Chat completion error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(e),
+        ) from e
+    except GatewayTimeoutError as e:
+        # 전체 요청 마감 시간(REQUEST_DEADLINE_SECONDS) 초과 — 클라이언트 무기한 대기 방지.
+        logger.error(f"Chat completion error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail=str(e),
         ) from e
     except HTTPException:

@@ -48,6 +48,7 @@
 8. **Unified Admin UI** — Single SPA at `/ui` combining playground, dashboard, key status, and model catalogue; all fetches use absolute URLs for proxy stability.
 9. **OpenAI API Compatibility** — `/v1/chat/completions` including streaming SSE (`chat.completion.chunk` + `[DONE]`).
 10. **Incremental Web-Intent Keyword Learning** — `services/keyword_store.py::KeywordStore` persists per-language (`ko`, `en`) keywords to JSON files (`data/web_keywords.{lang}.json`); `services/intent_classifier.py::IntentClassifier` substring-matches them before falling back to embedding similarity. `scripts/validate_flow.py` automatically registers false-negative queries to `/v1/admin/intent/keywords/learn` to grow the lexicon.
+    - **Regex search-intent patterns** — if no keyword matches, `data/web_patterns.{ko,en}.json` is checked: an `include` pattern (search *requests* such as 검색해서 / search the web / look it up) counts only when no `exclude` pattern (search as a *topic*: implementing a search feature, binary search, search engine internals) matches. Both languages apply to every query. Edit the JSON and restart; invalid regexes are skipped with a warning.
 
 ## API Surface
 
@@ -173,6 +174,8 @@ Key variables:
 - **Routing defaults** — `DEFAULT_FREE_MODEL`, `DEFAULT_PREMIUM_MODEL`, `MAX_TOKENS_FAST_MODEL`
 - **Local agents** — `OLLAMA_BASE_URL`, `OPENCODE_BASE_URL`, `OPENCLAW_BASE_URL`
 - **Features** — `ENABLE_CONTEXT_COMPRESSION`, `ENABLE_AUTO_WEB_FETCH`, `WEB_CACHE_TTL_HOURS`
+- **Web search engines** — `SEARCH_PROVIDERS` (default `duckduckgo,bing`, unchanged behaviour), `OPENSERP_BASE_URL`, `OPENSERP_ENGINE`, `OPENSERP_LANG`, `OPENSERP_TIMEOUT`. Optional [openserp](https://github.com/karust/openserp) backend: run `openserp serve -a 127.0.0.1 -p 7000`, then set `SEARCH_PROVIDERS=openserp,bing` and `OPENSERP_ENGINE=duck`. Engines are tried in order; an engine returning 0 links (or an unreachable openserp server) falls through to the next. See `README.ko.md` (canonical) for engine guidance and a measured comparison.
+- **Web backend** — `WEB_BACKEND=inprocess` (default, unchanged) or `mcp`. In `mcp` mode the gateway calls the standalone search MCP server (`search_mcp/server.py`, Streamable HTTP, default `http://127.0.0.1:8790/mcp`) instead of running the scraper in-process; LLM call count is unchanged because the gateway still decides when to search. Knobs: `SEARCH_MCP_URL`, `SEARCH_MCP_TIMEOUT`, `SEARCH_MCP_FALLBACK` (fall back to the in-process scraper on MCP failure, default true), `SEARCH_MCP_TOKEN`. The server needs its own venv (`search_mcp/requirements.txt`) because the MCP SDK requires `anyio>=4` while FastAPI 0.104 pins `anyio<4`. `searxng` is also available as a `SEARCH_PROVIDERS` engine (`SEARXNG_BASE_URL`, `SEARXNG_LANGUAGE`). See `search_mcp/README.ko.md`.
 - **Admin** — `ADMIN_API_KEY` (optional; unset disables admin auth)
 - **Web-intent keyword store** — `DATA_DIR` (default `data/`), `KEYWORD_EXTRACTION_MODEL` (Ollama small LLM name; regex fallback only when unset)
 

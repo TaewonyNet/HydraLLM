@@ -11,6 +11,38 @@ from ..models import (
 )
 
 
+class IWebScraper(ABC):
+    """웹 검색·본문 추출 계약.
+
+    프로세스 내 구현(services.scraper.WebScraper)과 검색 MCP 서버를 호출하는 구현
+    (adapters.web.mcp_search.McpWebScraper)이 이 계약을 공유한다. 웹 보강 서비스는
+    이 ABC 에만 의존하므로 WEB_BACKEND 설정만으로 둘을 바꿔 끼울 수 있다.
+    """
+
+    @abstractmethod
+    async def startup(self) -> None:
+        pass
+
+    @abstractmethod
+    async def shutdown(self) -> None:
+        pass
+
+    @abstractmethod
+    async def scrape_url(
+        self, url: str, mode: str = "standard", timeout_ms: int = 30000
+    ) -> str | None:
+        """페이지 본문. 실패·차단 시 None."""
+
+    @abstractmethod
+    async def search_and_scrape(
+        self, query: str, num_results: int = 3, mode: str = "standard"
+    ) -> str:
+        """검색 후 상위 페이지 본문을 ``--- SOURCE: <url> ---`` 블록으로 이어 붙인 문자열.
+
+        결과가 없으면 i18n 의 web.no_search_results / web.no_safe_results 메시지.
+        """
+
+
 class IContextManager(ABC):
     """멀티모달 대용량 컨텍스트의 오프로드/캐싱 계약.
 
